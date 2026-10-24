@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Local database & persistent data
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Environment & credentials
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.agents/

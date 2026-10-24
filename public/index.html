@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>BANTAR RED — Kandang Banteng Kecamatan Bantarsari</title>
+  <meta name="description" content="Aplikasi pengelolaan data masyarakat Kecamatan Bantarsari, Kabupaten Cilacap untuk keperluan kepartaian." />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="theme-color" content="#0d0a0b" />
+  <link rel="icon" type="image/png" href="logo.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="bg-orbs" aria-hidden="true"><span></span><span></span><span></span></div>
+
+  <!-- LOGIN -->
+  <main id="login-view" class="login-wrap hidden">
+    <section class="login-card glass">
+      <img src="logo.png" alt="Logo BANTAR RED" class="brand-logo" />
+      <h1>BANTAR RED</h1>
+      <p class="muted">kandang Banteng Kecamatan Bantarsari</p>
+      <form id="login-form" autocomplete="on">
+        <label class="field"><span>Username</span>
+          <input id="login-username" name="username" autocomplete="username" required autofocus />
+        </label>
+        <label class="field"><span>Password</span>
+          <input id="login-password" name="password" type="password" autocomplete="current-password" required />
+        </label>
+        <p id="login-error" class="form-error" role="alert"></p>
+        <button id="login-submit" class="btn btn-primary btn-block" type="submit">Masuk</button>
+      </form>
+      <p class="tiny muted center">Akses terbatas untuk kader yang berwenang. Seluruh aktivitas dicatat.</p>
+    </section>
+  </main>
+
+  <!-- APLIKASI -->
+  <div id="app-view" class="shell hidden">
+    <aside class="sidebar glass" id="sidebar">
+      <div class="side-brand">
+        <img src="logo.png" alt="Logo BANTAR RED" class="brand-logo sm" />
+        <div>
+          <strong>BANTAR RED</strong>
+          <small>Bantarsari</small>
+        </div>
+      </div>
+      <nav id="nav" aria-label="Menu utama">
+        <button class="nav-item" data-view="dashboard" id="nav-dashboard"><i>◧</i><span>Dashboard</span></button>
+        <button class="nav-item" data-view="warga" id="nav-warga"><i>☰</i><span>Database</span></button>
+        <button class="nav-item admin-only" data-view="pengguna" id="nav-pengguna"><i>☺</i><span>Pengguna &amp; Wilayah</span></button>
+        <button class="nav-item admin-only" data-view="sampah" id="nav-sampah"><i>♻</i><span>Backup</span></button>
+        <button class="nav-item admin-only" data-view="audit" id="nav-audit"><i>✎</i><span>Riwayat Aktivitas</span></button>
+      </nav>
+      <div class="side-user">
+        <div class="avatar" id="user-avatar">A</div>
+        <div class="who">
+          <strong id="user-name">-</strong>
+          <small id="user-role">-</small>
+        </div>
+        <button class="icon-btn" id="btn-password" title="Ganti password" aria-label="Ganti password">⚿</button>
+        <button class="icon-btn" id="btn-logout" title="Keluar" aria-label="Keluar">⏻</button>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" id="btn-menu" aria-label="Buka menu">☰</button>
+        <h1 id="page-title">Dashboard</h1>
+        <div class="top-actions" id="top-actions"></div>
+      </header>
+      <section id="content" class="content"></section>
+    </div>
+  </div>
+
+  <!-- MODAL -->
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-box glass">
+      <div class="modal-head">
+        <h2 id="modal-title">-</h2>
+        <button class="icon-btn" id="modal-close" aria-label="Tutup">✕</button>
+      </div>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>

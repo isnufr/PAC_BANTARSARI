@@ -160,6 +160,7 @@ async function boot() {
 
 /* ================= Navigasi ================= */
 function go(view) {
+  if (!state.me) return showLogin();
   state.view = view;
   $$('.nav-item').forEach((n) => n.classList.toggle('active', n.dataset.view === view));
   $('#page-title').textContent = TITLES[view];
@@ -211,7 +212,7 @@ async function renderDashboard() {
 
   c.innerHTML = `
     <div class="grid stats">
-      <div class="stat total"><small>Total Warga Terdata</small><b>${total}</b><em>${state.me.role === 'admin' ? 'Seluruh desa' : esc(state.me.desa)}</em></div>
+      <div class="stat total"><small>Total Warga Terdata</small><b>${total}</b><em>${state.me?.role === 'admin' ? 'Seluruh desa' : esc(state.me?.desa || '')}</em></div>
       ${STATUS.map((st) => `<div class="stat" style="--accent:${STATUS_COLOR[st.key]}"><small>${esc(st.label)}</small><b>${cnt[st.key] || 0}</b><em>${pct(cnt[st.key] || 0)}% dari total</em></div>`).join('')}
     </div>
     <div class="grid two">
@@ -267,24 +268,28 @@ function waLink(hp) {
   if (d.length < 9 || d.length > 15) return '';
   return 'https://wa.me/' + d;
 }
-const WA_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path d="M12 3a9 9 0 00-7.8 13.5L3 21l4.6-1.2A9 9 0 1012 3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path fill="currentColor" transform="translate(5.8 5.6) scale(.52)" d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2a1 1 0 011.02-.24c1.12.37 2.33.57 3.57.57a1 1 0 011 1V20a1 1 0 01-1 1A17 17 0 013 4a1 1 0 011-1h3.5a1 1 0 011 1c0 1.25.2 2.45.57 3.57a1 1 0 01-.25 1.02l-2.2 2.2z"/></svg>';
+const WA_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path d="M12 3a9 9 0 00-7.8 13.5L3 21l4.6-1.2A9 9 0 1012 3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path fill="currentColor" transform="translate(5.8 5.6) scale(.52)" d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2a1 1 0 011.02-.24c1.12.37 2.33.57 3.57.57a1 1 0 011 1V20a1 1 0 01-1 1A17 17 0 013 4a1 1 0 011-1h3.5a1 1 0 011 1c0 1.25.2 2.45.57 3.57a1 1 0 01-.25 1.02l-2.2 2.2z"/></svg>';
+const TRASH_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 6h18m-2 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6"/></svg>';
+const RESTORE_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>';
+const EDIT_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
 const DL_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>';
-function waButton(r) {
+
+function waShortcut(r) {
   const href = waLink(r.hp);
   return href
-    ? `<a class="btn btn-sm btn-wa" href="${esc(href)}" target="_blank" rel="noopener noreferrer" aria-label="Chat WhatsApp ${esc(r.nama)}" title="Chat WhatsApp ${esc(r.hp)}">${WA_ICON}<span>WA</span></a>`
-    : `<button type="button" class="btn btn-sm btn-wa" disabled aria-label="Nomor WhatsApp ${esc(r.nama)} belum tersedia" title="No. HP belum diisi atau tidak valid">${WA_ICON}<span>WA</span></button>`;
+    ? `<a class="btn-action btn-wa" href="${esc(href)}" target="_blank" rel="noopener noreferrer" aria-label="Chat WhatsApp ${esc(r.nama)}" title="Chat WhatsApp (${esc(r.hp)})" onclick="event.stopPropagation()">${WA_ICON}</a>`
+    : `<button type="button" class="btn-action btn-wa is-disabled" disabled aria-label="Nomor WhatsApp ${esc(r.nama)} belum tersedia" title="No. HP belum diisi atau tidak valid" onclick="event.stopPropagation()">${WA_ICON}</button>`;
 }
 
 function wargaShell(trash) {
-  const admin = state.me.role === 'admin';
+  const admin = state.me?.role === 'admin';
   const c = $('#content');
   c.innerHTML = `
     <div class="chips" id="chips"></div>
     <div class="filters">
       <input class="search" id="f-q" type="search" placeholder="Cari nama, NIK, No. HP, alamat…" aria-label="Cari" value="${esc(state.f.q)}">
       ${admin ? `<select id="f-desa" class="f-half" aria-label="Filter desa"><option value="">Semua desa</option>${state.desa.map((d) => `<option value="${d.id}" ${+state.f.desa === d.id ? 'selected' : ''}>${esc(d.nama)}</option>`).join('')}</select>` : ''}
-      <select id="f-dusun" class="${admin ? 'f-half' : 'f-wide'}" aria-label="Filter dusun">${dusunOpts(admin ? state.f.desa : state.me.desa_id, state.f.dusun, 'Semua dusun')}</select>
+      <select id="f-dusun" class="${admin ? 'f-half' : 'f-wide'}" aria-label="Filter dusun">${dusunOpts(admin ? state.f.desa : (state.me?.desa_id || ''), state.f.dusun, 'Semua dusun')}</select>
       <input id="f-rw" class="f-rw" inputmode="numeric" placeholder="RW" aria-label="RW" value="${esc(state.f.rw)}">
       <input id="f-rt" class="f-rt" inputmode="numeric" placeholder="RT" aria-label="RT" value="${esc(state.f.rt)}">
       <select id="f-jk" aria-label="Jenis kelamin"><option value="">L/P</option><option value="L" ${state.f.jk === 'L' ? 'selected' : ''}>Laki-laki</option><option value="P" ${state.f.jk === 'P' ? 'selected' : ''}>Perempuan</option></select>
@@ -358,19 +363,21 @@ async function loadWarga(trash) {
     <div class="wlist">${list.rows.map((r) => {
       const jkUmur = [r.jk, r.umur != null ? r.umur + ' th' : ''].filter(Boolean).join(' · ') || '-';
       return `
-      <article class="wcard">
+      <article class="wcard" data-id="${r.id}" role="button" tabindex="0" aria-label="Lihat detail ${esc(r.nama)}" title="Klik untuk lihat detail">
         <div class="w-main">
           <div class="w-name">${esc(r.nama)}</div>
           <div class="w-meta">
             <span class="w-pill ${r.jk === 'L' || r.jk === 'P' ? r.jk : ''}">${esc(jkUmur)}</span>
             <span class="w-desa${r.dusun_nama ? ' has-dusun' : ''}">${esc(r.desa || '-')}</span>${r.dusun_nama ? `<span class="w-dusun">${esc(r.dusun_nama)}</span>` : ''}
+            <span class="w-status">${badge(r.status)}</span>
           </div>
         </div>
-        <div class="w-status">${badge(r.status)}</div>
-        <div class="w-actions">
+        <div class="w-shortcuts">
           ${trash
-            ? `<button type="button" class="btn btn-sm" data-restore="${r.id}">Pulihkan</button><button type="button" class="btn btn-sm btn-danger" data-perm="${r.id}" data-nama="${esc(r.nama)}">Hapus permanen</button>`
-            : `${waButton(r)}<button type="button" class="btn btn-sm" data-view="${r.id}">Detail</button><button type="button" class="btn btn-sm" data-edit="${r.id}">Ubah</button><button type="button" class="btn btn-sm btn-danger" data-del="${r.id}" data-nama="${esc(r.nama)}">Hapus</button>`}
+            ? `<button type="button" class="btn-action btn-restore" data-restore="${r.id}" aria-label="Pulihkan ${esc(r.nama)}" title="Pulihkan" onclick="event.stopPropagation()">${RESTORE_ICON}</button>
+               <button type="button" class="btn-action btn-del" data-perm="${r.id}" data-nama="${esc(r.nama)}" aria-label="Hapus permanen" title="Hapus permanen" onclick="event.stopPropagation()">${TRASH_ICON}</button>`
+            : `${waShortcut(r)}
+               <button type="button" class="btn-action btn-del" data-del="${r.id}" data-nama="${esc(r.nama)}" aria-label="Hapus ${esc(r.nama)}" title="Hapus" onclick="event.stopPropagation()">${TRASH_ICON}</button>`}
         </div>
       </article>`;
     }).join('')}</div>
@@ -380,40 +387,89 @@ async function loadWarga(trash) {
   const byId = Object.fromEntries(list.rows.map((r) => [r.id, r]));
   $('#pg-prev').onclick = () => { state.f.page--; loadWarga(trash); };
   $('#pg-next').onclick = () => { state.f.page++; loadWarga(trash); };
-  $$('[data-view]', area).forEach((b) => (b.onclick = () => wargaDetail(byId[b.dataset.view])));
-  $$('[data-edit]', area).forEach((b) => (b.onclick = () => wargaForm(byId[b.dataset.edit])));
-  $$('[data-del]', area).forEach((b) => (b.onclick = async () => {
+
+  // Klik kartu untuk membuka detail data (on click)
+  $$('.wcard', area).forEach((c) => {
+    const r = byId[c.dataset.id];
+    if (!r) return;
+    c.onclick = (e) => {
+      if (e.target.closest('.btn-action')) return;
+      wargaDetail(r, trash);
+    };
+    c.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        if (e.target.closest('.btn-action')) return;
+        e.preventDefault();
+        wargaDetail(r, trash);
+      }
+    };
+  });
+
+  $$('[data-del]', area).forEach((b) => (b.onclick = async (e) => {
+    e.stopPropagation();
     if (!(await confirmBox('Hapus data?', `Pindahkan <b>${b.dataset.nama}</b> ke Backup? Admin masih bisa memulihkannya.`, 'Ya, hapus'))) return;
     try { await api('/warga/' + b.dataset.del, { method: 'DELETE' }); toast('Data dipindahkan ke Backup'); loadWarga(false); } catch (e) { toast(e.message, true); }
   }));
-  $$('[data-restore]', area).forEach((b) => (b.onclick = async () => {
+  $$('[data-restore]', area).forEach((b) => (b.onclick = async (e) => {
+    e.stopPropagation();
     try { await api(`/warga/${b.dataset.restore}/restore`, { method: 'POST' }); toast('Data dipulihkan'); loadWarga(true); } catch (e) { toast(e.message, true); }
   }));
-  $$('[data-perm]', area).forEach((b) => (b.onclick = async () => {
+  $$('[data-perm]', area).forEach((b) => (b.onclick = async (e) => {
+    e.stopPropagation();
     if (!(await confirmBox('Hapus permanen?', `Data <b>${b.dataset.nama}</b> akan dihapus selamanya dan tidak bisa dipulihkan.`, 'Hapus permanen'))) return;
     try { await api(`/warga/${b.dataset.perm}/permanent`, { method: 'DELETE' }); toast('Data dihapus permanen'); loadWarga(true); } catch (e) { toast(e.message, true); }
   }));
 }
 
-function wargaDetail(r) {
+function wargaDetail(r, isTrash = false) {
   const row = (k, v) => `<dt>${k}</dt><dd>${v ? esc(v) : '<span class="muted">-</span>'}</dd>`;
+  const hpDisplay = r.hp
+    ? `${esc(r.hp)}${waLink(r.hp) ? ` <a class="link-btn" href="${esc(waLink(r.hp))}" target="_blank" rel="noopener noreferrer" style="color:#22c55e;margin-left:8px;font-weight:600">Chat WA ↗</a>` : ''}`
+    : '';
+
   openModal('Detail Warga', `
     <div style="display:flex;gap:12px;align-items:center;margin-bottom:16px"><div class="avatar" style="width:52px;height:52px;font-size:22px">${esc(r.nama[0])}</div>
-      <div><h3 style="font-size:19px">${esc(r.nama)}</h3>${badge(r.status)}</div></div>
+      <div><h3 style="font-size:20px">${esc(r.nama)}</h3>${badge(r.status)}</div></div>
     <dl class="kv">
       ${row('NIK', r.nik)}${row('Jenis kelamin', r.jk === 'L' ? 'Laki-laki' : r.jk === 'P' ? 'Perempuan' : '')}
       ${row('Tempat, tgl lahir', [r.tempat_lahir, r.tgl_lahir && fmtDate(r.tgl_lahir)].filter(Boolean).join(', '))}
       ${row('Umur', r.umur != null ? r.umur + ' tahun' : '')}${row('Status kawin', r.status_kawin)}${row('Pekerjaan', r.pekerjaan)}
-      ${row('Desa', r.desa)}${row('Dusun', r.dusun_nama)}${row('RT / RW', `${r.rt || '-'} / ${r.rw || '-'}`)}${r.alamat ? row('Alamat', r.alamat) : ''}${row('No. HP', r.hp)}
+      ${row('Desa', r.desa)}${row('Dusun', r.dusun_nama)}${row('RT / RW', `${r.rt || '-'} / ${r.rw || '-'}`)}${r.alamat ? row('Alamat', r.alamat) : ''}${row('No. HP', hpDisplay)}
       ${String(r.status || '').includes('STRUKTURAL') ? row('Jabatan', r.jabatan) + row('Tingkat', r.tingkat) + row('No. KTA', r.no_kta) : ''}
       ${row('Catatan', r.catatan)}${row('Dibuat', fmtDate(r.created_at))}${row('Diubah', fmtDate(r.updated_at))}
     </dl>
-    <div class="modal-foot"><button class="btn" onclick="closeModal()">Tutup</button></div>`);
+    <div class="modal-foot">
+      <button type="button" class="btn" onclick="closeModal()">Tutup</button>
+      ${isTrash
+        ? `<button type="button" class="btn btn-primary" id="detail-btn-restore">Pulihkan Data</button>`
+        : `<button type="button" class="btn btn-primary" id="detail-btn-edit">${EDIT_ICON}<span>Ubah Data</span></button>`}
+    </div>`);
+
+  const editBtn = $('#detail-btn-edit');
+  if (editBtn) {
+    editBtn.onclick = () => {
+      closeModal();
+      wargaForm(r);
+    };
+  }
+  const restoreBtn = $('#detail-btn-restore');
+  if (restoreBtn) {
+    restoreBtn.onclick = async () => {
+      try {
+        await api(`/warga/${r.id}/restore`, { method: 'POST' });
+        closeModal();
+        toast('Data dipulihkan');
+        loadWarga(true);
+      } catch (e) {
+        toast(e.message, true);
+      }
+    };
+  }
 }
 
 function wargaForm(r = null) {
   const v = (k) => esc(r?.[k] ?? '');
-  const admin = state.me.role === 'admin';
+  const admin = state.me?.role === 'admin';
   const cur = (r?.status ? String(r.status).split(',').map((s) => s.trim()).filter(Boolean) : ['NETRAL']);
   openModal(r ? 'Ubah Data' : 'Tambah Data', `
     <form id="w-form" class="form-grid" novalidate>
@@ -428,7 +484,7 @@ function wargaForm(r = null) {
       <label class="field"><span>No. HP / WhatsApp</span><input id="w-hp" inputmode="tel" value="${v('hp')}"></label>
 
       <div class="form-section">Alamat</div>
-      <label class="field"><span>Desa *</span><select id="w-desa" ${admin ? '' : 'disabled'}>${admin ? '<option value="">Pilih desa…</option>' : ''}${state.desa.map((d) => `<option value="${d.id}" ${(r?.desa_id ?? state.me.desa_id) === d.id ? 'selected' : ''}>${esc(d.nama)}</option>`).join('')}</select></label>
+      <label class="field"><span>Desa *</span><select id="w-desa" ${admin ? '' : 'disabled'}>${admin ? '<option value="">Pilih desa…</option>' : ''}${state.desa.map((d) => `<option value="${d.id}" ${(r?.desa_id ?? state.me?.desa_id) === d.id ? 'selected' : ''}>${esc(d.nama)}</option>`).join('')}</select></label>
       <label class="field"><span>Dusun <button type="button" class="link-btn" id="dusun-add-toggle">＋ Dusun baru</button></span><select id="w-dusun"></select></label>
       <div class="field full hidden" id="dusun-new"><span>Tambah dusun baru di desa terpilih</span>
         <div class="inline-row"><input id="dusun-new-nama" placeholder="Nama dusun"><button type="button" class="btn" id="dusun-new-save">Simpan dusun</button></div></div>

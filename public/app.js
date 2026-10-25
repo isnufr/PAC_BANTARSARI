@@ -84,7 +84,7 @@ function openModal(title, html, narrow = false) {
 function closeModal() { $('#modal').classList.add('hidden'); $('#modal-body').innerHTML = ''; }
 $('#modal-close').onclick = closeModal;
 $('#modal').addEventListener('mousedown', (e) => { if (e.target.id === 'modal') closeModal(); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeModal(); setNav(false); } });
 
 function confirmBox(title, text, okLabel = 'Ya, lanjutkan') {
   return new Promise((resolve) => {
@@ -163,13 +163,23 @@ function go(view) {
   state.view = view;
   $$('.nav-item').forEach((n) => n.classList.toggle('active', n.dataset.view === view));
   $('#page-title').textContent = TITLES[view];
-  $('#sidebar').classList.remove('open');
+  setNav(false);
   $('#top-actions').innerHTML = '';
   ({ dashboard: renderDashboard, warga: renderWarga, sampah: renderSampah, pengguna: renderPengguna, audit: renderAudit })[view]();
 }
 $$('.nav-item').forEach((n) => (n.onclick = () => go(n.dataset.view)));
-$('#btn-menu').onclick = () => $('#sidebar').classList.toggle('open');
-$('#sidebar').addEventListener('click', (e) => { if (e.target.id === 'sidebar') e.target.classList.remove('open'); });
+
+// Sidebar mobile: buka/tutup laci + backdrop (ketuk di luar untuk menutup)
+function setNav(open) {
+  $('#sidebar').classList.toggle('open', open);
+  $('#nav-backdrop').classList.toggle('show', open);
+  document.body.classList.toggle('nav-open', open);
+  $('#btn-menu').setAttribute('aria-expanded', String(open));
+}
+$('#btn-menu').onclick = () => setNav(!$('#sidebar').classList.contains('open'));
+$('#btn-close-menu').onclick = () => setNav(false);
+$('#nav-backdrop').onclick = () => setNav(false);
+window.matchMedia('(min-width: 901px)').addEventListener('change', (e) => { if (e.matches) setNav(false); });
 
 /* ================= Dashboard ================= */
 async function renderDashboard() {
@@ -246,21 +256,41 @@ function dusunOpts(desaId, selected, firstLabel) {
     .join('');
 }
 
+// Normalisasi nomor HP Indonesia -> tautan WhatsApp (wa.me). Kosong jika tidak valid.
+function waLink(hp) {
+  const first = String(hp ?? '').split(/[\/,;]/).find((s) => /\d/.test(s)) || '';
+  let d = first.replace(/\D/g, '');
+  if (!d) return '';
+  if (d.startsWith('00')) d = d.slice(2);
+  if (d.startsWith('0')) d = '62' + d.slice(1);
+  else if (d.startsWith('8')) d = '62' + d;
+  if (d.length < 9 || d.length > 15) return '';
+  return 'https://wa.me/' + d;
+}
+const WA_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path d="M12 3a9 9 0 00-7.8 13.5L3 21l4.6-1.2A9 9 0 1012 3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path fill="currentColor" transform="translate(5.8 5.6) scale(.52)" d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2a1 1 0 011.02-.24c1.12.37 2.33.57 3.57.57a1 1 0 011 1V20a1 1 0 01-1 1A17 17 0 013 4a1 1 0 011-1h3.5a1 1 0 011 1c0 1.25.2 2.45.57 3.57a1 1 0 01-.25 1.02l-2.2 2.2z"/></svg>';
+const DL_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>';
+function waButton(r) {
+  const href = waLink(r.hp);
+  return href
+    ? `<a class="btn btn-sm btn-wa" href="${esc(href)}" target="_blank" rel="noopener noreferrer" aria-label="Chat WhatsApp ${esc(r.nama)}" title="Chat WhatsApp ${esc(r.hp)}">${WA_ICON}<span>WA</span></a>`
+    : `<button type="button" class="btn btn-sm btn-wa" disabled aria-label="Nomor WhatsApp ${esc(r.nama)} belum tersedia" title="No. HP belum diisi atau tidak valid">${WA_ICON}<span>WA</span></button>`;
+}
+
 function wargaShell(trash) {
   const admin = state.me.role === 'admin';
   const c = $('#content');
   c.innerHTML = `
     <div class="chips" id="chips"></div>
     <div class="filters">
-      <input class="search" id="f-q" type="search" placeholder="Cari nama, NIK, No. HP, alamat…" value="${esc(state.f.q)}">
-      ${admin ? `<select id="f-desa"><option value="">Semua desa</option>${state.desa.map((d) => `<option value="${d.id}" ${+state.f.desa === d.id ? 'selected' : ''}>${esc(d.nama)}</option>`).join('')}</select>` : ''}
-      <select id="f-dusun">${dusunOpts(admin ? state.f.desa : state.me.desa_id, state.f.dusun, 'Semua dusun')}</select>
-      <input id="f-rw" placeholder="RW" style="max-width:80px" value="${esc(state.f.rw)}">
-      <input id="f-rt" placeholder="RT" style="max-width:80px" value="${esc(state.f.rt)}">
-      <select id="f-jk"><option value="">L/P</option><option value="L" ${state.f.jk === 'L' ? 'selected' : ''}>Laki-laki</option><option value="P" ${state.f.jk === 'P' ? 'selected' : ''}>Perempuan</option></select>
-      <input id="f-umin" type="number" min="0" placeholder="Umur min" style="max-width:105px" value="${esc(state.f.umurMin)}">
-      <input id="f-umax" type="number" min="0" placeholder="Umur maks" style="max-width:105px" value="${esc(state.f.umurMax)}">
-      <button class="btn btn-sm" id="f-reset">Reset</button>
+      <input class="search" id="f-q" type="search" placeholder="Cari nama, NIK, No. HP, alamat…" aria-label="Cari" value="${esc(state.f.q)}">
+      ${admin ? `<select id="f-desa" class="f-half" aria-label="Filter desa"><option value="">Semua desa</option>${state.desa.map((d) => `<option value="${d.id}" ${+state.f.desa === d.id ? 'selected' : ''}>${esc(d.nama)}</option>`).join('')}</select>` : ''}
+      <select id="f-dusun" class="${admin ? 'f-half' : 'f-wide'}" aria-label="Filter dusun">${dusunOpts(admin ? state.f.desa : state.me.desa_id, state.f.dusun, 'Semua dusun')}</select>
+      <input id="f-rw" class="f-rw" inputmode="numeric" placeholder="RW" aria-label="RW" value="${esc(state.f.rw)}">
+      <input id="f-rt" class="f-rt" inputmode="numeric" placeholder="RT" aria-label="RT" value="${esc(state.f.rt)}">
+      <select id="f-jk" aria-label="Jenis kelamin"><option value="">L/P</option><option value="L" ${state.f.jk === 'L' ? 'selected' : ''}>Laki-laki</option><option value="P" ${state.f.jk === 'P' ? 'selected' : ''}>Perempuan</option></select>
+      <input id="f-umin" class="f-umin" type="number" inputmode="numeric" min="0" placeholder="Umur min" aria-label="Umur minimal" value="${esc(state.f.umurMin)}">
+      <input id="f-umax" class="f-umax" type="number" inputmode="numeric" min="0" placeholder="Umur maks" aria-label="Umur maksimal" value="${esc(state.f.umurMax)}">
+      <button type="button" class="btn btn-sm" id="f-reset">Reset</button>
     </div>
     <div id="table-area"></div>`;
   const apply = () => {
@@ -288,8 +318,8 @@ function wargaShell(trash) {
 
 async function renderWarga() {
   $('#top-actions').innerHTML = `
-    <a class="btn" id="btn-export" href="#"><span>⭳</span><span class="lbl">Ekspor Excel</span></a>
-    <button class="btn btn-primary" id="btn-add"><span>＋</span><span class="lbl">Tambah Data</span></button>`;
+    <a class="btn" id="btn-export" href="#" title="Ekspor Excel" aria-label="Ekspor Excel">${DL_ICON}<span class="lbl">Ekspor Excel</span></a>
+    <button class="btn btn-primary" id="btn-add" type="button" title="Tambah Data" aria-label="Tambah Data"><span aria-hidden="true">＋</span><span class="lbl">Tambah Data</span></button>`;
   $('#btn-add').onclick = () => wargaForm();
   $('#btn-export').onclick = (e) => { e.preventDefault(); window.location = '/api/export?' + filterQS({ page: '' }); };
   wargaShell(false);
@@ -325,23 +355,27 @@ async function loadWarga(trash) {
   }
   const pages = Math.ceil(list.total / list.limit);
   area.innerHTML = `
-    <div class="table-wrap"><table>
-      <thead><tr><th>Nama / NIK</th><th>L/P · Umur</th><th>Desa · Dusun · RT/RW</th><th>No. HP</th><th>Status</th><th></th></tr></thead>
-      <tbody>${list.rows.map((r) => `
-        <tr>
-          <td data-label="Nama"><div class="name">${esc(r.nama)}</div><div class="sub nik">${esc(r.nik)}</div></td>
-          <td data-label="L/P · Umur">${esc(r.jk || '-')} · ${r.umur != null ? r.umur + ' th' : '-'}</td>
-          <td data-label="Desa"><div>${esc(r.desa)}</div><div class="sub">${r.dusun_nama ? 'Dusun ' + esc(r.dusun_nama) + ' · ' : ''}RT ${esc(r.rt || '-')} / RW ${esc(r.rw || '-')}</div></td>
-          <td data-label="No. HP">${esc(r.hp || '-')}</td>
-          <td data-label="Status">${badge(r.status)}${String(r.status || '').includes('STRUKTURAL') && r.jabatan ? `<div class="sub">${esc(r.jabatan)}</div>` : ''}</td>
-          <td class="actions">
-            ${trash
-              ? `<button class="btn btn-sm" data-restore="${r.id}">Pulihkan</button> <button class="btn btn-sm btn-danger" data-perm="${r.id}" data-nama="${esc(r.nama)}">Hapus permanen</button>`
-              : `<button class="btn btn-sm" data-view="${r.id}">Detail</button> <button class="btn btn-sm" data-edit="${r.id}">Ubah</button> <button class="btn btn-sm btn-danger" data-del="${r.id}" data-nama="${esc(r.nama)}">Hapus</button>`}
-          </td>
-        </tr>`).join('')}</tbody></table></div>
+    <div class="wlist">${list.rows.map((r) => {
+      const jkUmur = [r.jk, r.umur != null ? r.umur + ' th' : ''].filter(Boolean).join(' · ') || '-';
+      return `
+      <article class="wcard">
+        <div class="w-main">
+          <div class="w-name">${esc(r.nama)}</div>
+          <div class="w-meta">
+            <span class="w-pill ${r.jk === 'L' || r.jk === 'P' ? r.jk : ''}">${esc(jkUmur)}</span>
+            <span class="w-desa${r.dusun_nama ? ' has-dusun' : ''}">${esc(r.desa || '-')}</span>${r.dusun_nama ? `<span class="w-dusun">${esc(r.dusun_nama)}</span>` : ''}
+          </div>
+        </div>
+        <div class="w-status">${badge(r.status)}</div>
+        <div class="w-actions">
+          ${trash
+            ? `<button type="button" class="btn btn-sm" data-restore="${r.id}">Pulihkan</button><button type="button" class="btn btn-sm btn-danger" data-perm="${r.id}" data-nama="${esc(r.nama)}">Hapus permanen</button>`
+            : `${waButton(r)}<button type="button" class="btn btn-sm" data-view="${r.id}">Detail</button><button type="button" class="btn btn-sm" data-edit="${r.id}">Ubah</button><button type="button" class="btn btn-sm btn-danger" data-del="${r.id}" data-nama="${esc(r.nama)}">Hapus</button>`}
+        </div>
+      </article>`;
+    }).join('')}</div>
     <div class="pager"><span>${list.total} data · halaman ${list.page} dari ${pages}</span>
-      <span class="pg"><button class="btn btn-sm" id="pg-prev" ${list.page <= 1 ? 'disabled' : ''}>‹ Sebelumnya</button><button class="btn btn-sm" id="pg-next" ${list.page >= pages ? 'disabled' : ''}>Berikutnya ›</button></span></div>`;
+      <span class="pg"><button type="button" class="btn btn-sm" id="pg-prev" ${list.page <= 1 ? 'disabled' : ''}>‹ Sebelumnya</button><button type="button" class="btn btn-sm" id="pg-next" ${list.page >= pages ? 'disabled' : ''}>Berikutnya ›</button></span></div>`;
 
   const byId = Object.fromEntries(list.rows.map((r) => [r.id, r]));
   $('#pg-prev').onclick = () => { state.f.page--; loadWarga(trash); };
@@ -540,7 +574,7 @@ async function renderPengguna() {
           <td data-label="Status"><span class="badge" style="--c:${esc(st.color)}">${esc(st.label)}</span></td>
           <td data-label="Kode" class="mono tiny muted">${esc(st.key)}</td>
           <td data-label="Petunjuk" class="muted tiny">${esc(st.hint || '-')}</td>
-          <td data-label="Warga Terdata"><b>${st.jumlah_warga || 0}</b> warga</td>
+          <td data-label="Warga Terdata"><span><b>${st.jumlah_warga || 0}</b> warga</span></td>
           <td class="actions">
             <button class="btn btn-sm" data-stedit="${st.id}">Ubah</button>
             ${st.is_system ? '' : `<button class="btn btn-sm btn-danger" data-stdel="${st.id}">Hapus</button>`}

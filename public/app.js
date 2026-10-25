@@ -268,9 +268,20 @@ function waLink(hp) {
   if (d.length < 9 || d.length > 15) return '';
   return 'https://wa.me/' + d;
 }
-const WA_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path d="M12 3a9 9 0 00-7.8 13.5L3 21l4.6-1.2A9 9 0 1012 3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path fill="currentColor" transform="translate(5.8 5.6) scale(.52)" d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2a1 1 0 011.02-.24c1.12.37 2.33.57 3.57.57a1 1 0 011 1V20a1 1 0 01-1 1A17 17 0 013 4a1 1 0 011-1h3.5a1 1 0 011 1c0 1.25.2 2.45.57 3.57a1 1 0 01-.25 1.02l-2.2 2.2z"/></svg>';
-const TRASH_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 6h18m-2 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6"/></svg>';
-const RESTORE_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>';
+function formatRt(v) {
+  if (!v) return '';
+  const s = String(v).trim();
+  return /^RT/i.test(s) ? s : `RT ${s}`;
+}
+function formatRw(v) {
+  if (!v) return '';
+  const s = String(v).trim();
+  return /^RW/i.test(s) ? s : `RW ${s}`;
+}
+
+const WA_ICON = '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false"><path d="M12 3a9 9 0 00-7.8 13.5L3 21l4.6-1.2A9 9 0 1012 3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path fill="currentColor" transform="translate(5.8 5.6) scale(.52)" d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2a1 1 0 011.02-.24c1.12.37 2.33.57 3.57.57a1 1 0 011 1V20a1 1 0 01-1 1A17 17 0 013 4a1 1 0 011-1h3.5a1 1 0 011 1c0 1.25.2 2.45.57 3.57a1 1 0 01-.25 1.02l-2.2 2.2z"/></svg>';
+const TRASH_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 6h18m-2 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6"/></svg>';
+const RESTORE_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>';
 const EDIT_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
 const DL_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>';
 
@@ -362,22 +373,26 @@ async function loadWarga(trash) {
   area.innerHTML = `
     <div class="wlist">${list.rows.map((r) => {
       const jkUmur = [r.jk, r.umur != null ? r.umur + ' th' : ''].filter(Boolean).join(' · ') || '-';
+      const locParts = [r.desa || '', r.dusun_nama || '', formatRt(r.rt), formatRw(r.rw)].filter(Boolean);
+      const locHtml = locParts.length ? locParts.map(esc).join('<span class="w-sep" aria-hidden="true">›</span>') : '-';
       return `
       <article class="wcard" data-id="${r.id}" role="button" tabindex="0" aria-label="Lihat detail ${esc(r.nama)}" title="Klik untuk lihat detail">
-        <div class="w-main">
-          <div class="w-name">${esc(r.nama)}</div>
+        <div class="w-row-top">
+          <div class="w-name" title="${esc(r.nama)}">${esc(r.nama)}</div>
+          <div class="w-status">${badge(r.status)}</div>
+        </div>
+        <div class="w-row-sub">
           <div class="w-meta">
             <span class="w-pill ${r.jk === 'L' || r.jk === 'P' ? r.jk : ''}">${esc(jkUmur)}</span>
-            <span class="w-desa${r.dusun_nama ? ' has-dusun' : ''}">${esc(r.desa || '-')}</span>${r.dusun_nama ? `<span class="w-dusun">${esc(r.dusun_nama)}</span>` : ''}
-            <span class="w-status">${badge(r.status)}</span>
+            <span class="w-loc" title="${esc(locParts.join(' › '))}">${locHtml}</span>
           </div>
-        </div>
-        <div class="w-shortcuts">
-          ${trash
-            ? `<button type="button" class="btn-action btn-restore" data-restore="${r.id}" aria-label="Pulihkan ${esc(r.nama)}" title="Pulihkan" onclick="event.stopPropagation()">${RESTORE_ICON}</button>
-               <button type="button" class="btn-action btn-del" data-perm="${r.id}" data-nama="${esc(r.nama)}" aria-label="Hapus permanen" title="Hapus permanen" onclick="event.stopPropagation()">${TRASH_ICON}</button>`
-            : `${waShortcut(r)}
-               <button type="button" class="btn-action btn-del" data-del="${r.id}" data-nama="${esc(r.nama)}" aria-label="Hapus ${esc(r.nama)}" title="Hapus" onclick="event.stopPropagation()">${TRASH_ICON}</button>`}
+          <div class="w-shortcuts">
+            ${trash
+              ? `<button type="button" class="btn-action btn-restore" data-restore="${r.id}" aria-label="Pulihkan ${esc(r.nama)}" title="Pulihkan" onclick="event.stopPropagation()">${RESTORE_ICON}</button>
+                 <button type="button" class="btn-action btn-del" data-perm="${r.id}" data-nama="${esc(r.nama)}" aria-label="Hapus permanen" title="Hapus permanen" onclick="event.stopPropagation()">${TRASH_ICON}</button>`
+              : `${waShortcut(r)}
+                 <button type="button" class="btn-action btn-del" data-del="${r.id}" data-nama="${esc(r.nama)}" aria-label="Hapus ${esc(r.nama)}" title="Hapus" onclick="event.stopPropagation()">${TRASH_ICON}</button>`}
+          </div>
         </div>
       </article>`;
     }).join('')}</div>

@@ -2,6 +2,7 @@ import express from 'express';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import XLSX from 'xlsx';
 import { db, hashPassword, verifyPassword, initialAdminPassword } from './db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -19,7 +20,8 @@ function getAllStatuses() {
 
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
-app.use(express.json({ limit: '200kb' }));
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 app.use((req, res, next) => {
   res.set({
     'X-Content-Type-Options': 'nosniff',
@@ -450,6 +452,8 @@ function buildFilter(q, user, trash) {
   if (q.rt) { where.push('w.rt = ?'); p.push(String(q.rt)); }
   if (q.rw) { where.push('w.rw = ?'); p.push(String(q.rw)); }
   if (q.jk && ['L', 'P'].includes(q.jk)) { where.push('w.jk = ?'); p.push(q.jk); }
+  if (q.status_kawin) { where.push('w.status_kawin = ?'); p.push(String(q.status_kawin)); }
+  if (q.tingkat) { where.push('w.tingkat = ?'); p.push(String(q.tingkat)); }
   if (q.q) {
     where.push('(w.nama LIKE ? OR w.nik LIKE ? OR w.hp LIKE ? OR w.alamat LIKE ?)');
     const like = `%${String(q.q).trim()}%`;
@@ -628,6 +632,79 @@ const csvCell = (v) => {
   return `"${s.replace(/"/g, '""')}"`;
 };
 
+const EXPORT_COL_DEFS = {
+  nik: { label: 'NIK', fn: (r) => r.nik || '' },
+  nama: { label: 'Nama Lengkap', fn: (r) => r.nama || '' },
+  jk: { label: 'JK', fn: (r) => r.jk || '-' },
+  tempat_lahir: { label: 'Tempat Lahir', fn: (r) => r.tempat_lahir || '-' },
+  tgl_lahir: { label: 'Tgl Lahir', fn: (r) => r.tgl_lahir || '-' },
+  umur: { label: 'Umur', fn: (r) => (r.umur != null ? r.umur : '-') },
+  status_kawin: { label: 'Status Kawin', fn: (r) => r.status_kawin || '-' },
+  pekerjaan: { label: 'Pekerjaan', fn: (r) => r.pekerjaan || '-' },
+  desa: { label: 'Desa', fn: (r) => r.desa || '-' },
+  dusun_nama: { label: 'Dusun', fn: (r) => r.dusun_nama || '-' },
+  rt: { label: 'RT', fn: (r) => (r.rt ? String(r.rt).padStart(2, '0') : '-') },
+  rw: { label: 'RW', fn: (r) => (r.rw ? String(r.rw).padStart(2, '0') : '-') },
+  alamat: { label: 'Alamat', fn: (r) => r.alamat || '-' },
+  hp: { label: 'No HP / WA', fn: (r) => r.hp || '-' },
+  status: { label: 'Status Kepartaian', fn: (r) => r.status || '-' },
+  jabatan: { label: 'Jabatan', fn: (r) => r.jabatan || '-' },
+  tingkat: { label: 'Tingkat', fn: (r) => r.tingkat || '-' },
+  no_kta: { label: 'No KTA', fn: (r) => r.no_kta || '-' },
+  catatan: { label: 'Catatan', fn: (r) => r.catatan || '-' },
+  created_at: { label: 'Tgl Terdaftar', fn: (r) => r.created_at || '-' },
+};
+
+app.get(
+  '/api/export/data',
+  auth,
+  wrap((req, res) => {
+    const f = buildFilter(req.query, req.user, false);
+    const rows = db
+      .prepare(
+        `SELECT w.*, d.nama AS desa, COALESCE(du.nama, w.dusun) AS dusun_nama, ${f.umur} AS umur
+         FROM warga w JOIN desa d ON d.id=w.desa_id LEFT JOIN dusun du ON du.id=w.dusun_id
+         WHERE ${f.sql} ORDER BY d.nama, dusun_nama, w.rw, w.rt, w.nama`
+      )
+      .all(...f.p);
+    res.json({ total: rows.length, rows });
+  })
+);
+
+const INDO_MONTHS = [
+  'JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI',
+  'JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER'
+];
+
+function buildExportFileNameServer(q, user, ext) {
+  const now = new Date();
+  const bulan = INDO_MONTHS[now.getMonth()];
+  const tahun = now.getFullYear();
+
+  let statusStr = 'SEMUA-STATUS';
+  if (q.status) {
+    statusStr = String(q.status).toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
+  }
+
+  let desaStr = 'SEMUA-DESA';
+  const desaId = user.role === 'operator' ? user.desa_id : (q.desa ? Number(q.desa) : null);
+  if (desaId) {
+    const d = db.prepare('SELECT nama FROM desa WHERE id=?').get(desaId);
+    if (d) desaStr = d.nama.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
+  }
+
+  let dusunStr = '';
+  if (q.dusun) {
+    const du = db.prepare('SELECT nama FROM dusun WHERE id=?').get(Number(q.dusun));
+    if (du) dusunStr = du.nama.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
+  }
+
+  const parts = [statusStr, desaStr];
+  if (dusunStr) parts.push(dusunStr);
+  parts.push(bulan, tahun);
+  return `${parts.join('_')}.${ext}`;
+}
+
 app.get(
   '/api/export',
   auth,
@@ -635,28 +712,360 @@ app.get(
     const f = buildFilter(req.query, req.user, false);
     const rows = db
       .prepare(
-        `SELECT w.*, d.nama AS desa, COALESCE(du.nama, w.dusun) AS dusun_nama, ${f.umur} AS umur FROM warga w JOIN desa d ON d.id=w.desa_id LEFT JOIN dusun du ON du.id=w.dusun_id
+        `SELECT w.*, d.nama AS desa, COALESCE(du.nama, w.dusun) AS dusun_nama, ${f.umur} AS umur
+         FROM warga w JOIN desa d ON d.id=w.desa_id LEFT JOIN dusun du ON du.id=w.dusun_id
          WHERE ${f.sql} ORDER BY d.nama, dusun_nama, w.rw, w.rt, w.nama`
       )
       .all(...f.p);
-    const head = ['NIK','Nama','JK','Tempat Lahir','Tgl Lahir','Umur','Status Kawin','Pekerjaan','Desa','Dusun','RT','RW','Alamat','No HP','Status','Jabatan','Tingkat','No KTA','Catatan'];
-    const lines = [head.map(csvCell).join(',')];
-    rows.forEach((r) => {
+
+    let activeKeys = Object.keys(EXPORT_COL_DEFS);
+    if (req.query.cols) {
+      const requested = req.query.cols.split(',').map((s) => s.trim());
+      const filtered = requested.filter((k) => EXPORT_COL_DEFS[k]);
+      if (filtered.length > 0) activeKeys = filtered;
+    }
+
+    const format = String(req.query.format || 'csv').toLowerCase();
+
+    if (format === 'xlsx' || format === 'excel') {
+      const fileName = buildExportFileNameServer(req.query, req.user, 'xlsx');
+      const headerRow = ['NO', ...activeKeys.map((k) => EXPORT_COL_DEFS[k].label)];
+      const dataRows = rows.map((r, i) => [i + 1, ...activeKeys.map((k) => String(EXPORT_COL_DEFS[k].fn(r)))]);
+
+      // Title & Kop rows in Excel
+      let statusLabel = req.query.status || 'SEMUA STATUS';
+      let desaLabel = 'SEMUA DESA';
+      const desaId = req.user.role === 'operator' ? req.user.desa_id : (req.query.desa ? Number(req.query.desa) : null);
+      if (desaId) {
+        const d = db.prepare('SELECT nama FROM desa WHERE id=?').get(desaId);
+        if (d) desaLabel = `DESA ${d.nama.toUpperCase()}`;
+      }
+      let dusunLabel = '';
+      if (req.query.dusun) {
+        const du = db.prepare('SELECT nama FROM dusun WHERE id=?').get(Number(req.query.dusun));
+        if (du) dusunLabel = `DUSUN ${du.nama.toUpperCase()}`;
+      }
+      const kopPartsExcel = [
+        'STATUS: ' + statusLabel.toUpperCase(),
+        'DESA: ' + (desaLabel || 'SEMUA DESA').toUpperCase(),
+      ];
+      if (dusunLabel) kopPartsExcel.push('DUSUN: ' + dusunLabel.toUpperCase());
+
+      const now = new Date();
+      const tglWaktu = now.toLocaleDateString('id-ID', {
+        day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit'
+      });
+
+      const titleRows = [
+        ['PENGURUS ANAK CABANG PDI PERJUANGAN KECAMATAN BANTARSARI'],
+        ['LAPORAN DATA KADER & PENGURUS'],
+        [kopPartsExcel.join(' | ')],
+        [`WAKTU EKSPOR: ${tglWaktu} WIB | TOTAL: ${rows.length} DATA`],
+        [],
+      ];
+
+      const wsData = [...titleRows, headerRow, ...dataRows];
+      const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+      // Pastikan NIK, No HP, RT, RW tidak diformat sebagai angka ilmiah
+      activeKeys.forEach((key, colIdx) => {
+        const tableColIdx = colIdx + 1; // offset kolom NO
+        if (['nik', 'hp', 'rt', 'rw', 'no_kta'].includes(key)) {
+          for (let r = 5; r <= wsData.length; r++) {
+            const cellRef = XLSX.utils.encode_cell({ r: r - 1, c: tableColIdx });
+            if (ws[cellRef]) ws[cellRef].t = 's';
+          }
+        }
+      });
+
+      const colWidths = headerRow.map((h, i) => {
+        let maxLen = h.length;
+        for (let j = 0; j < Math.min(rows.length, 100); j++) {
+          const val = String(dataRows[j]?.[i] || '');
+          if (val.length > maxLen) maxLen = val.length;
+        }
+        return { wch: Math.min(Math.max(maxLen + 3, i === 0 ? 6 : 10), 45) };
+      });
+      ws['!cols'] = colWidths;
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Data Kader');
+      const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+      audit(req.user, 'EKSPOR_EXCEL', null, `${rows.length} baris`);
+      res.set({
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': `attachment; filename="${fileName}"`,
+      });
+      return res.send(buf);
+    }
+
+    const fileName = buildExportFileNameServer(req.query, req.user, 'csv');
+    const headerRow = ['NO', ...activeKeys.map((k) => EXPORT_COL_DEFS[k].label)];
+    const lines = [headerRow.map(csvCell).join(',')];
+    rows.forEach((r, i) => {
       lines.push(
         [
-          `="${r.nik}"`, r.nama, r.jk, r.tempat_lahir, r.tgl_lahir, r.umur, r.status_kawin, r.pekerjaan,
-          r.desa, r.dusun_nama, r.rt, r.rw, r.alamat, r.hp, r.status, r.jabatan, r.tingkat, r.no_kta, r.catatan,
-        ]
-          .map((v, i) => (i === 0 ? v : csvCell(v)))
-          .join(',')
+          i + 1,
+          ...activeKeys.map((k) => {
+            const val = EXPORT_COL_DEFS[k].fn(r);
+            if (k === 'nik') return `="${r.nik}"`;
+            return csvCell(val);
+          }),
+        ].join(',')
       );
     });
-    audit(req.user, 'EKSPOR', null, `${rows.length} baris`);
+
+    audit(req.user, 'EKSPOR_CSV', null, `${rows.length} baris`);
     res.set({
       'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': `attachment; filename="data-kader-${new Date().toISOString().slice(0, 10)}.csv"`,
+      'Content-Disposition': `attachment; filename="${fileName}"`,
     });
     res.send('\uFEFF' + lines.join('\r\n'));
+  })
+);
+
+app.post(
+  '/api/import',
+  auth,
+  wrap((req, res) => {
+    const { rows, updateExisting } = req.body || {};
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ error: 'Tidak ada data untuk diimpor.' });
+    }
+    if (rows.length > 10000) {
+      return res.status(400).json({ error: 'Maksimal 10.000 data per sekali impor.' });
+    }
+
+    const desaList = db.prepare('SELECT id, nama FROM desa').all();
+    const desaMap = new Map();
+    desaList.forEach((d) => {
+      desaMap.set(d.nama.toLowerCase().trim(), d.id);
+      desaMap.set(String(d.id), d.id);
+    });
+
+    const dusunList = db.prepare('SELECT id, desa_id, nama FROM dusun').all();
+    const dusunMap = new Map();
+    dusunList.forEach((du) => {
+      dusunMap.set(`${du.desa_id}||${du.nama.toLowerCase().trim()}`, du.id);
+    });
+
+    const validStatusKeys = getStatusKeys();
+    const statusMasterList = getAllStatuses();
+    const statusLabelToKey = new Map();
+    statusMasterList.forEach((s) => {
+      statusLabelToKey.set(s.key.toUpperCase(), s.key);
+      statusLabelToKey.set(s.label.toUpperCase(), s.key);
+    });
+
+    const insertDusunStmt = db.prepare('INSERT INTO dusun (desa_id, nama) VALUES (?,?)');
+    const getWargaByNik = db.prepare('SELECT id, deleted_at, desa_id FROM warga WHERE nik=?');
+    const insertWargaStmt = db.prepare(`
+      INSERT INTO warga (
+        nik, nama, jk, tempat_lahir, tgl_lahir, status_kawin, pekerjaan,
+        desa_id, dusun, dusun_id, rt, rw, alamat, hp, status, jabatan,
+        tingkat, no_kta, catatan, created_by
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `);
+    const updateWargaStmt = db.prepare(`
+      UPDATE warga SET
+        nama=?, jk=?, tempat_lahir=?, tgl_lahir=?, status_kawin=?, pekerjaan=?,
+        desa_id=?, dusun=?, dusun_id=?, rt=?, rw=?, alamat=?, hp=?, status=?, jabatan=?,
+        tingkat=?, no_kta=?, catatan=?, updated_at=datetime('now','localtime')
+      WHERE id=?
+    `);
+
+    let inserted = 0;
+    let updated = 0;
+    let skipped = 0;
+    const errors = [];
+    const seenNikInFile = new Set();
+
+    db.exec('BEGIN TRANSACTION');
+    try {
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i] || {};
+        const rowNum = i + 2;
+        const rawNik = clean(row.nik);
+        const nik = rawNik ? String(rawNik).replace(/\D/g, '') : null;
+        const nama = clean(row.nama);
+
+        if (!nik || nik.length !== 16) {
+          errors.push(`Baris ${rowNum}: NIK harus 16 digit angka (ditemukan: "${rawNik || '-'}").`);
+          skipped++;
+          continue;
+        }
+
+        if (seenNikInFile.has(nik)) {
+          errors.push(`Baris ${rowNum}: NIK ${nik} duplikat di dalam file yang sama (dilewati).`);
+          skipped++;
+          continue;
+        }
+        seenNikInFile.add(nik);
+
+        if (!nama) {
+          errors.push(`Baris ${rowNum}: Nama wajib diisi.`);
+          skipped++;
+          continue;
+        }
+
+        let desaId = null;
+        if (req.user.role === 'operator') {
+          desaId = req.user.desa_id;
+        } else {
+          const rawDesa = clean(row.desa);
+          if (rawDesa) {
+            desaId = desaMap.get(rawDesa.toLowerCase().trim()) || null;
+          }
+          if (!desaId && req.user.desa_id) {
+            desaId = req.user.desa_id;
+          }
+        }
+
+        if (!desaId) {
+          errors.push(`Baris ${rowNum} (${nama}): Desa wajib dipilih/sesuai desa Kecamatan Bantarsari.`);
+          skipped++;
+          continue;
+        }
+
+        let dusunId = null;
+        const rawDusun = clean(row.dusun);
+        if (rawDusun) {
+          const dKey = `${desaId}||${rawDusun.toLowerCase().trim()}`;
+          if (dusunMap.has(dKey)) {
+            dusunId = dusunMap.get(dKey);
+          } else {
+            try {
+              const resDu = insertDusunStmt.run(desaId, rawDusun);
+              dusunId = Number(resDu.lastInsertRowid);
+              dusunMap.set(dKey, dusunId);
+            } catch {
+              const existingDu = db.prepare('SELECT id FROM dusun WHERE desa_id=? AND nama=?').get(desaId, rawDusun);
+              dusunId = existingDu ? existingDu.id : null;
+            }
+          }
+        }
+
+        let jk = clean(row.jk)?.toUpperCase() || null;
+        if (jk) {
+          if (jk.startsWith('L')) jk = 'L';
+          else if (jk.startsWith('P') || jk.startsWith('W')) jk = 'P';
+          else jk = null;
+        }
+
+        let tglLahir = clean(row.tgl_lahir);
+        if (tglLahir) {
+          if (/^\d{4}-\d{2}-\d{2}$/.test(tglLahir)) {
+            // ok
+          } else if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}$/.test(tglLahir)) {
+            const parts = tglLahir.split(/[\/\-]/);
+            const d = parts[0].padStart(2, '0');
+            const m = parts[1].padStart(2, '0');
+            const y = parts[2];
+            tglLahir = `${y}-${m}-${d}`;
+          } else {
+            const dt = new Date(tglLahir);
+            if (!isNaN(dt.getTime())) {
+              tglLahir = dt.toISOString().slice(0, 10);
+            } else {
+              tglLahir = null;
+            }
+          }
+        }
+
+        let rawStatus = row.status;
+        let statuses = [];
+        if (Array.isArray(rawStatus)) {
+          statuses = rawStatus.map((s) => String(s).trim());
+        } else if (typeof rawStatus === 'string') {
+          statuses = rawStatus.split(/[,;/]/).map((s) => s.trim()).filter(Boolean);
+        }
+        let resolvedStatuses = [];
+        for (const s of statuses) {
+          const up = s.toUpperCase();
+          if (statusLabelToKey.has(up)) {
+            resolvedStatuses.push(statusLabelToKey.get(up));
+          } else if (validStatusKeys.includes(up)) {
+            resolvedStatuses.push(up);
+          }
+        }
+        if (!resolvedStatuses.length) resolvedStatuses = ['NETRAL'];
+        if (resolvedStatuses.length > 1 && resolvedStatuses.includes('NETRAL')) {
+          resolvedStatuses = resolvedStatuses.filter((s) => s !== 'NETRAL');
+        }
+        resolvedStatuses = [...new Set(resolvedStatuses)];
+        const statusStr = resolvedStatuses.join(',');
+
+        let jabatan = clean(row.jabatan);
+        let tingkat = clean(row.tingkat);
+        let noKta = clean(row.no_kta);
+        if (!resolvedStatuses.includes('STRUKTURAL')) {
+          jabatan = null;
+          tingkat = null;
+          noKta = null;
+        }
+
+        const rt = clean(row.rt);
+        const rw = clean(row.rw);
+        const alamat = clean(row.alamat);
+        const hp = clean(row.hp);
+        const tempatLahir = clean(row.tempat_lahir);
+        const statusKawin = clean(row.status_kawin);
+        const pekerjaan = clean(row.pekerjaan);
+        const catatan = clean(row.catatan);
+
+        const existing = getWargaByNik.get(nik);
+        if (existing) {
+          if (req.user.role === 'operator' && existing.desa_id !== req.user.desa_id) {
+            errors.push(`Baris ${rowNum}: NIK ${nik} sudah terdaftar di desa lain.`);
+            skipped++;
+            continue;
+          }
+
+          if (existing.deleted_at) {
+            errors.push(`Baris ${rowNum}: NIK ${nik} ada di Backup / Tempat Sampah.`);
+            skipped++;
+            continue;
+          }
+
+          if (!updateExisting) {
+            errors.push(`Baris ${rowNum}: NIK ${nik} sudah terdaftar (${nama}). Dilewati.`);
+            skipped++;
+            continue;
+          }
+
+          updateWargaStmt.run(
+            nama, jk, tempatLahir, tglLahir, statusKawin, pekerjaan,
+            desaId, rawDusun, dusunId, rt, rw, alamat, hp, statusStr, jabatan,
+            tingkat, noKta, catatan, existing.id
+          );
+          updated++;
+        } else {
+          insertWargaStmt.run(
+            nik, nama, jk, tempatLahir, tglLahir, statusKawin, pekerjaan,
+            desaId, rawDusun, dusunId, rt, rw, alamat, hp, statusStr, jabatan,
+            tingkat, noKta, catatan, req.user.id
+          );
+          inserted++;
+        }
+      }
+
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      console.error('Import error:', err);
+      return res.status(500).json({ error: 'Gagal memproses impor: ' + err.message });
+    }
+
+    audit(req.user, 'IMPORT', null, `Total ${rows.length} data: ${inserted} baru, ${updated} diperbarui, ${skipped} dilewati`);
+    res.json({
+      ok: true,
+      total: rows.length,
+      inserted,
+      updated,
+      skipped,
+      errors: errors.slice(0, 100),
+    });
   })
 );
 

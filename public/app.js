@@ -21,7 +21,7 @@ function setStatusList(list) {
 const TINGKAT = ['DPC', 'PAC', 'Ranting', 'Anak Ranting'];
 const KAWIN = ['Belum Kawin', 'Kawin', 'Cerai Hidup', 'Cerai Mati'];
 const TITLES = {
-  dashboard: 'Dashboard', warga: 'Database', sampah: 'Backup',
+  dashboard: 'Dashboard', warga: 'Database', 'export-import': 'Export & Import', sampah: 'Backup',
   pengguna: 'Pengguna & Wilayah', audit: 'Riwayat Aktivitas',
 };
 
@@ -166,7 +166,7 @@ function go(view) {
   $('#page-title').textContent = TITLES[view];
   setNav(false);
   $('#top-actions').innerHTML = '';
-  ({ dashboard: renderDashboard, warga: renderWarga, sampah: renderSampah, pengguna: renderPengguna, audit: renderAudit })[view]();
+  ({ dashboard: renderDashboard, warga: renderWarga, 'export-import': renderExportImport, sampah: renderSampah, pengguna: renderPengguna, audit: renderAudit })[view]();
 }
 $$('.nav-item').forEach((n) => (n.onclick = () => go(n.dataset.view)));
 
@@ -334,10 +334,8 @@ function wargaShell(trash) {
 
 async function renderWarga() {
   $('#top-actions').innerHTML = `
-    <a class="btn" id="btn-export" href="#" title="Ekspor Excel" aria-label="Ekspor Excel">${DL_ICON}<span class="lbl">Ekspor Excel</span></a>
     <button class="btn btn-primary" id="btn-add" type="button" title="Tambah Data" aria-label="Tambah Data"><span aria-hidden="true">＋</span><span class="lbl">Tambah Data</span></button>`;
   $('#btn-add').onclick = () => wargaForm();
-  $('#btn-export').onclick = (e) => { e.preventDefault(); window.location = '/api/export?' + filterQS({ page: '' }); };
   wargaShell(false);
   loadWarga(false);
 }
@@ -810,6 +808,1286 @@ async function renderAudit() {
         <td data-label="Pengguna">${esc(r.username || '-')}</td>
         <td data-label="Aksi"><span class="badge role">${esc(r.aksi)}</span></td>
         <td data-label="Keterangan" style="word-break:break-word">${esc(r.detail || '')}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+/* ================= EXPORT & IMPORT ================= */
+const EXPORT_COLUMNS = [
+  { key: 'nik', label: 'NIK (16 Digit)', default: true },
+  { key: 'nama', label: 'Nama Lengkap', default: true },
+  { key: 'jk', label: 'Jenis Kelamin (L/P)', default: true },
+  { key: 'tempat_lahir', label: 'Tempat Lahir', default: false },
+  { key: 'tgl_lahir', label: 'Tanggal Lahir', default: true },
+  { key: 'umur', label: 'Umur', default: true },
+  { key: 'status_kawin', label: 'Status Perkawinan', default: false },
+  { key: 'pekerjaan', label: 'Pekerjaan', default: false },
+  { key: 'desa', label: 'Desa', default: true },
+  { key: 'dusun_nama', label: 'Dusun', default: true },
+  { key: 'rt', label: 'RT', default: true },
+  { key: 'rw', label: 'RW', default: true },
+  { key: 'alamat', label: 'Alamat', default: true },
+  { key: 'hp', label: 'No. HP / WA', default: true },
+  { key: 'status', label: 'Status Kepartaian', default: true },
+  { key: 'jabatan', label: 'Jabatan (Struktural)', default: false },
+  { key: 'tingkat', label: 'Tingkat (Struktural)', default: false },
+  { key: 'no_kta', label: 'No. KTA', default: false },
+  { key: 'catatan', label: 'Catatan', default: false },
+  { key: 'created_at', label: 'Tanggal Terdaftar', default: false },
+];
+
+let eiCurrentTab = 'export';
+let eiFilter = {
+  desa: '', dusun: '', status: '', jk: '', status_kawin: '',
+  tingkat: '', rt: '', rw: '', umurMin: '', umurMax: '', q: ''
+};
+let eiSelectedCols = new Set(EXPORT_COLUMNS.filter((c) => c.default).map((c) => c.key));
+let eiExportData = [];
+let eiImportFileRows = [];
+let eiImportFileName = '';
+let eiImportFileSize = 0;
+let eiUpdateExisting = false;
+
+function renderExportImport() {
+  const admin = state.me?.role === 'admin';
+  if (!admin && state.me?.desa_id) {
+    eiFilter.desa = String(state.me.desa_id);
+  }
+
+  const c = $('#content');
+  c.innerHTML = `
+    <div class="ei-wrap">
+      <div class="ei-tabs" role="tablist">
+        <button type="button" class="ei-tab-btn ${eiCurrentTab === 'export' ? 'active' : ''}" id="tab-btn-export" role="tab" aria-selected="${eiCurrentTab === 'export'}">
+          <i>📤</i><span>Export Data</span>
+        </button>
+        <button type="button" class="ei-tab-btn ${eiCurrentTab === 'import' ? 'active' : ''}" id="tab-btn-import" role="tab" aria-selected="${eiCurrentTab === 'import'}">
+          <i>📥</i><span>Import Data</span>
+        </button>
+      </div>
+
+      <div id="ei-tab-content"></div>
+    </div>`;
+
+  $('#tab-btn-export').onclick = () => {
+    eiCurrentTab = 'export';
+    $('#tab-btn-export').classList.add('active');
+    $('#tab-btn-import').classList.remove('active');
+    renderExportTab();
+  };
+
+  $('#tab-btn-import').onclick = () => {
+    eiCurrentTab = 'import';
+    $('#tab-btn-import').classList.add('active');
+    $('#tab-btn-export').classList.remove('active');
+    renderImportTab();
+  };
+
+  if (eiCurrentTab === 'export') {
+    renderExportTab();
+  } else {
+    renderImportTab();
+  }
+}
+
+function getExportVal(r, key) {
+  switch (key) {
+    case 'nik': return r.nik ? String(r.nik) : '';
+    case 'nama': return r.nama || '';
+    case 'jk': return r.jk === 'L' ? 'Laki-laki (L)' : r.jk === 'P' ? 'Perempuan (P)' : (r.jk || '-');
+    case 'tempat_lahir': return r.tempat_lahir || '-';
+    case 'tgl_lahir': return r.tgl_lahir || '-';
+    case 'umur': return r.umur != null ? String(r.umur) : '-';
+    case 'status_kawin': return r.status_kawin || '-';
+    case 'pekerjaan': return r.pekerjaan || '-';
+    case 'desa': return r.desa || '-';
+    case 'dusun_nama': return r.dusun_nama || r.dusun || '-';
+    case 'rt': return r.rt ? String(r.rt).padStart(2, '0') : '-';
+    case 'rw': return r.rw ? String(r.rw).padStart(2, '0') : '-';
+    case 'alamat': return r.alamat || '-';
+    case 'hp': return r.hp || '-';
+    case 'status': {
+      if (!r.status) return 'NETRAL';
+      return String(r.status).split(',').map((k) => STATUS_MAP[k.trim()]?.label || k.trim()).join(', ');
+    }
+    case 'jabatan': return r.jabatan || '-';
+    case 'tingkat': return r.tingkat || '-';
+    case 'no_kta': return r.no_kta || '-';
+    case 'catatan': return r.catatan || '-';
+    case 'created_at': return r.created_at ? fmtDate(r.created_at) : '-';
+    default: return r[key] || '-';
+  }
+}
+
+async function fetchExportData() {
+  const p = new URLSearchParams();
+  Object.entries(eiFilter).forEach(([k, v]) => {
+    if (v !== '' && v != null) p.set(k, v);
+  });
+  try {
+    const res = await api('/export/data?' + p.toString());
+    eiExportData = res.rows || [];
+    updateExportCounterUI();
+  } catch (err) {
+    console.error('Gagal mengambil data export:', err);
+    toast('Gagal memuat data export: ' + err.message, true);
+  }
+}
+
+function updateExportCounterUI() {
+  const total = eiExportData.length;
+  const countEl = $('#ei-counter-num');
+  if (countEl) countEl.textContent = total.toLocaleString('id-ID');
+  const badgeEl = $('#ei-col-badge');
+  if (badgeEl) badgeEl.textContent = `${eiSelectedCols.size} dari ${EXPORT_COLUMNS.length} kolom dipilih`;
+}
+
+function renderExportTab() {
+  const admin = state.me?.role === 'admin';
+  const tc = $('#ei-tab-content');
+  if (!tc) return;
+
+  tc.innerHTML = `
+    <!-- KARTU 1: FILTER DATA -->
+    <section class="ei-card">
+      <div class="ei-card-head">
+        <div class="ei-card-title">
+          <span class="step-num">1</span>
+          <div>
+            <h3>Tentukan Filter Data (Kriteria Ekspor)</h3>
+            <p class="ei-card-subtitle">Pilih kriteria untuk menyaring data warga yang ingin dimasukkan ke dalam berkas.</p>
+          </div>
+        </div>
+        <button type="button" class="btn btn-sm" id="btn-reset-filter">Reset Filter</button>
+      </div>
+
+      <div class="ei-filter-grid">
+        ${admin ? `
+          <div class="ei-field">
+            <label for="exp-desa">Desa</label>
+            <select id="exp-desa">
+              <option value="">Semua Desa</option>
+              ${state.desa.map((d) => `<option value="${d.id}" ${+eiFilter.desa === d.id ? 'selected' : ''}>${esc(d.nama)}</option>`).join('')}
+            </select>
+          </div>` : `
+          <div class="ei-field">
+            <label>Desa</label>
+            <input type="text" value="${esc(state.me?.desa || 'Desa Anda')}" disabled style="opacity:.8;background:var(--panel-strong)" />
+          </div>`}
+
+        <div class="ei-field">
+          <label for="exp-dusun">Dusun</label>
+          <select id="exp-dusun">
+            ${dusunOpts(admin ? eiFilter.desa : (state.me?.desa_id || ''), eiFilter.dusun, 'Semua Dusun')}
+          </select>
+        </div>
+
+        <div class="ei-field">
+          <label for="exp-status">Status Kepartaian</label>
+          <select id="exp-status">
+            <option value="">Semua Status</option>
+            ${STATUS.map((s) => `<option value="${s.key}" ${eiFilter.status === s.key ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}
+          </select>
+        </div>
+
+        <div class="ei-field">
+          <label for="exp-jk">Jenis Kelamin</label>
+          <select id="exp-jk">
+            <option value="">Semua (L &amp; P)</option>
+            <option value="L" ${eiFilter.jk === 'L' ? 'selected' : ''}>Laki-laki (L)</option>
+            <option value="P" ${eiFilter.jk === 'P' ? 'selected' : ''}>Perempuan (P)</option>
+          </select>
+        </div>
+
+        <div class="ei-field">
+          <label for="exp-kawin">Status Perkawinan</label>
+          <select id="exp-kawin">
+            <option value="">Semua Status Kawin</option>
+            ${KAWIN.map((k) => `<option value="${k}" ${eiFilter.status_kawin === k ? 'selected' : ''}>${esc(k)}</option>`).join('')}
+          </select>
+        </div>
+
+        <div class="ei-field">
+          <label for="exp-tingkat">Tingkat (Struktural)</label>
+          <select id="exp-tingkat">
+            <option value="">Semua Tingkat</option>
+            ${TINGKAT.map((t) => `<option value="${t}" ${eiFilter.tingkat === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}
+          </select>
+        </div>
+
+        <div class="ei-field">
+          <label for="exp-rt">RT</label>
+          <input id="exp-rt" type="text" placeholder="Contoh: 01" value="${esc(eiFilter.rt)}" />
+        </div>
+
+        <div class="ei-field">
+          <label for="exp-rw">RW</label>
+          <input id="exp-rw" type="text" placeholder="Contoh: 02" value="${esc(eiFilter.rw)}" />
+        </div>
+
+        <div class="ei-field">
+          <label for="exp-umin">Umur Minimal</label>
+          <input id="exp-umin" type="number" min="0" max="120" placeholder="Min (contoh: 17)" value="${esc(eiFilter.umurMin)}" />
+        </div>
+
+        <div class="ei-field">
+          <label for="exp-umax">Umur Maksimal</label>
+          <input id="exp-umax" type="number" min="0" max="120" placeholder="Maks (contoh: 35)" value="${esc(eiFilter.umurMax)}" />
+        </div>
+
+        <div class="ei-field" style="grid-column: 1 / -1">
+          <label for="exp-q">Pencarian Kata Kunci (Nama, NIK, No. HP, atau Alamat)</label>
+          <input id="exp-q" type="search" placeholder="Ketik kata kunci pencarian..." value="${esc(eiFilter.q)}" />
+        </div>
+      </div>
+    </section>
+
+    <!-- KARTU 2: CHECKLIST PILIHAN KOLOM -->
+    <section class="ei-card">
+      <div class="ei-card-head">
+        <div class="ei-card-title">
+          <span class="step-num">2</span>
+          <div>
+            <h3>Pilih Kolom Data yang Ingin Diekspor (Checklist Manual)</h3>
+            <p class="ei-card-subtitle">Centang kolom yang ingin disertakan. Anda bebas menentukan kolom mana pun.</p>
+          </div>
+        </div>
+        <span class="badge role" id="ei-col-badge">${eiSelectedCols.size} dari ${EXPORT_COLUMNS.length} kolom dipilih</span>
+      </div>
+
+      <div class="ei-preset-bar">
+        <span style="font-size:12.5px;color:var(--muted);font-weight:600">Pilihan Cepat:</span>
+        <button type="button" class="btn btn-sm" id="btn-col-all">Pilih Semua</button>
+        <button type="button" class="btn btn-sm" id="btn-col-standard">Preset Standar</button>
+        <button type="button" class="btn btn-sm" id="btn-col-struktural">Preset Struktural</button>
+        <button type="button" class="btn btn-sm" id="btn-col-contact">Preset Kontak &amp; Wilayah</button>
+        <button type="button" class="btn btn-sm btn-danger" id="btn-col-none">Batal Semua</button>
+      </div>
+
+      <div class="ei-cols-grid" id="ei-cols-container">
+        ${EXPORT_COLUMNS.map((c) => {
+          const checked = eiSelectedCols.has(c.key);
+          return `
+            <label class="ei-col-label ${checked ? 'checked' : ''}" data-key="${c.key}">
+              <input type="checkbox" value="${c.key}" ${checked ? 'checked' : ''} />
+              <span title="${esc(c.label)}">${esc(c.label)}</span>
+            </label>`;
+        }).join('')}
+      </div>
+    </section>
+
+    <!-- KARTU 3: FORMAT DAN DOWNLOAD -->
+    <section class="ei-card">
+      <div class="ei-card-head">
+        <div class="ei-card-title">
+          <span class="step-num">3</span>
+          <div>
+            <h3>Pilih Format &amp; Unduh Berkas</h3>
+            <p class="ei-card-subtitle">Klik format berkas yang Anda butuhkan di bawah ini.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Counter Banner -->
+      <div class="ei-counter-banner">
+        <div class="ei-counter-info">
+          <span class="icon">📊</span>
+          <div>
+            <strong>Ditemukan <b id="ei-counter-num">-</b> data warga</strong>
+            <div><small>Sesuai dengan kriteria filter yang Anda tentukan di atas.</small></div>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <label style="font-size:12px;color:var(--muted)">Ukuran Kertas PDF:</label>
+          <select id="pdf-paper" style="width:auto;padding:6px 10px;font-size:13px">
+            <option value="a4" selected>A4</option>
+            <option value="folio">F4 / Folio</option>
+          </select>
+          <label style="font-size:12px;color:var(--muted)">Orientasi PDF:</label>
+          <select id="pdf-orient" style="width:auto;padding:6px 10px;font-size:13px">
+            <option value="auto" selected>Otomatis (Sesuai Kolom)</option>
+            <option value="landscape">Lanskap (Melebar)</option>
+            <option value="portrait">Potret (Tegak)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Action Buttons Grid -->
+      <div class="ei-actions-grid">
+        <button type="button" class="ei-dl-card excel" id="btn-export-excel">
+          <div class="ei-dl-card-head">
+            <span class="dl-icon">📗</span>
+            <span class="ei-dl-badge">Rekomendasi</span>
+          </div>
+          <strong>Export ke Excel (.xlsx)</strong>
+          <small>Berkas Microsoft Excel asli. Kolom tersusun rapi, teks NIK tidak terpotong, dan siap dianalisis.</small>
+        </button>
+
+        <button type="button" class="ei-dl-card csv" id="btn-export-csv">
+          <div class="ei-dl-card-head">
+            <span class="dl-icon">📄</span>
+            <span class="ei-dl-badge">Universal</span>
+          </div>
+          <strong>Export ke CSV (.csv)</strong>
+          <small>Format teks berstandar UTF-8 dengan pemisah koma. Kompatibel dengan semua sistem database.</small>
+        </button>
+
+        <button type="button" class="ei-dl-card pdf" id="btn-export-pdf">
+          <div class="ei-dl-card-head">
+            <span class="dl-icon">📕</span>
+            <span class="ei-dl-badge">Siap Cetak</span>
+          </div>
+          <strong>Export ke PDF (.pdf)</strong>
+          <small>Dokumen siap cetak dengan kop resmi PAC PDI Perjuangan Bantarsari, tabel bergaris, dan nomor halaman.</small>
+        </button>
+      </div>
+    </section>`;
+
+  // Filter event listeners
+  const onFilterChange = () => {
+    if (admin && $('#exp-desa')) {
+      eiFilter.desa = $('#exp-desa').value;
+      const dSel = $('#exp-dusun');
+      if (dSel) dSel.innerHTML = dusunOpts(eiFilter.desa, '', 'Semua Dusun');
+      eiFilter.dusun = '';
+    }
+    if ($('#exp-dusun')) eiFilter.dusun = $('#exp-dusun').value;
+    if ($('#exp-status')) eiFilter.status = $('#exp-status').value;
+    if ($('#exp-jk')) eiFilter.jk = $('#exp-jk').value;
+    if ($('#exp-kawin')) eiFilter.status_kawin = $('#exp-kawin').value;
+    if ($('#exp-tingkat')) eiFilter.tingkat = $('#exp-tingkat').value;
+    if ($('#exp-rt')) eiFilter.rt = $('#exp-rt').value.trim();
+    if ($('#exp-rw')) eiFilter.rw = $('#exp-rw').value.trim();
+    if ($('#exp-umin')) eiFilter.umurMin = $('#exp-umin').value.trim();
+    if ($('#exp-umax')) eiFilter.umurMax = $('#exp-umax').value.trim();
+    if ($('#exp-q')) eiFilter.q = $('#exp-q').value.trim();
+
+    fetchExportData();
+  };
+
+  if ($('#exp-desa')) $('#exp-desa').onchange = onFilterChange;
+  if ($('#exp-dusun')) $('#exp-dusun').onchange = onFilterChange;
+  if ($('#exp-status')) $('#exp-status').onchange = onFilterChange;
+  if ($('#exp-jk')) $('#exp-jk').onchange = onFilterChange;
+  if ($('#exp-kawin')) $('#exp-kawin').onchange = onFilterChange;
+  if ($('#exp-tingkat')) $('#exp-tingkat').onchange = onFilterChange;
+
+  let searchTimeout = null;
+  ['exp-rt', 'exp-rw', 'exp-umin', 'exp-umax', 'exp-q'].forEach((id) => {
+    const el = $('#' + id);
+    if (el) {
+      el.oninput = () => {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(onFilterChange, 250);
+      };
+    }
+  });
+
+  $('#btn-reset-filter').onclick = () => {
+    eiFilter = {
+      desa: admin ? '' : String(state.me?.desa_id || ''),
+      dusun: '', status: '', jk: '', status_kawin: '',
+      tingkat: '', rt: '', rw: '', umurMin: '', umurMax: '', q: ''
+    };
+    renderExportTab();
+  };
+
+  // Checklist Column event listeners
+  const updateColsUI = () => {
+    $$('#ei-cols-container .ei-col-label').forEach((lbl) => {
+      const key = lbl.dataset.key;
+      const chk = lbl.querySelector('input');
+      const isChecked = eiSelectedCols.has(key);
+      chk.checked = isChecked;
+      lbl.classList.toggle('checked', isChecked);
+    });
+    updateExportCounterUI();
+  };
+
+  $$('#ei-cols-container .ei-col-label').forEach((lbl) => {
+    const key = lbl.dataset.key;
+    const chk = lbl.querySelector('input');
+    chk.onchange = (e) => {
+      if (chk.checked) eiSelectedCols.add(key);
+      else eiSelectedCols.delete(key);
+      lbl.classList.toggle('checked', chk.checked);
+      updateExportCounterUI();
+    };
+  });
+
+  $('#btn-col-all').onclick = () => {
+    EXPORT_COLUMNS.forEach((c) => eiSelectedCols.add(c.key));
+    updateColsUI();
+  };
+  $('#btn-col-none').onclick = () => {
+    eiSelectedCols.clear();
+    updateColsUI();
+  };
+  $('#btn-col-standard').onclick = () => {
+    eiSelectedCols = new Set(['nik', 'nama', 'jk', 'tgl_lahir', 'umur', 'desa', 'dusun_nama', 'rt', 'rw', 'alamat', 'hp', 'status']);
+    updateColsUI();
+  };
+  $('#btn-col-struktural').onclick = () => {
+    eiSelectedCols = new Set(['nik', 'nama', 'jk', 'hp', 'desa', 'dusun_nama', 'rt', 'rw', 'status', 'jabatan', 'tingkat', 'no_kta']);
+    updateColsUI();
+  };
+  $('#btn-col-contact').onclick = () => {
+    eiSelectedCols = new Set(['nik', 'nama', 'jk', 'desa', 'dusun_nama', 'rt', 'rw', 'alamat', 'hp', 'status']);
+    updateColsUI();
+  };
+
+  // Download Action Listeners
+  $('#btn-export-excel').onclick = handleExportExcel;
+  $('#btn-export-csv').onclick = handleExportCsv;
+  $('#btn-export-pdf').onclick = handleExportPdf;
+
+  // Initial data fetch
+  fetchExportData();
+}
+
+const INDO_MONTHS = [
+  'JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI',
+  'JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER'
+];
+
+function getExportMeta() {
+  const now = new Date();
+  const bulan = INDO_MONTHS[now.getMonth()];
+  const tahun = now.getFullYear();
+
+  // 1. Status
+  let statusKey = eiFilter.status || '';
+  let statusLabel = statusKey ? (STATUS_MAP[statusKey]?.label || statusKey) : 'SEMUA STATUS';
+  let statusSlug = (statusKey ? (STATUS_MAP[statusKey]?.label || statusKey) : 'SEMUA-STATUS')
+    .toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+
+  // 2. Desa
+  let desaName = '';
+  const currentDesaId = eiFilter.desa || (state.me?.role === 'operator' && state.me?.desa_id ? String(state.me.desa_id) : '');
+  if (currentDesaId) {
+    const dObj = state.desa.find((d) => d.id === +currentDesaId);
+    desaName = dObj?.nama || (state.me?.desa_id === +currentDesaId ? state.me.desa : '');
+  }
+  let desaSlug = desaName
+    ? desaName.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
+    : 'SEMUA-DESA';
+  let desaLabel = desaName ? `DESA ${desaName.toUpperCase()}` : 'SEMUA DESA (KEC. BANTARSARI)';
+
+  // 3. Dusun (jika dipilih)
+  let dusunName = '';
+  if (eiFilter.dusun) {
+    const duObj = state.dusun.find((du) => du.id === +eiFilter.dusun);
+    dusunName = duObj?.nama || '';
+  }
+  let dusunSlug = dusunName
+    ? dusunName.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
+    : '';
+  let dusunLabel = dusunName ? `DUSUN ${dusunName.toUpperCase()}` : '';
+
+  // Penamaan Berkas: STATUS_DESA_DUSUN_BULAN_TAHUN (jika dusun dipilih)
+  //                  STATUS_DESA_BULAN_TAHUN (jika dusun tidak dipilih)
+  const fnParts = [statusSlug, desaSlug];
+  if (dusunSlug) fnParts.push(dusunSlug);
+  fnParts.push(bulan, tahun);
+  const fileNameBase = fnParts.join('_');
+
+  // Wilayah untuk Kop Laporan
+  let wilayahText = desaLabel;
+  if (dusunLabel) {
+    wilayahText += ` — ${dusunLabel}`;
+  }
+
+  const tglWaktu = now.toLocaleDateString('id-ID', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  return {
+    statusLabel,
+    statusSlug,
+    desaName,
+    desaLabel,
+    dusunName,
+    dusunLabel,
+    wilayahText,
+    bulan,
+    tahun,
+    fileNameBase,
+    tglWaktu,
+  };
+}
+
+function handleExportExcel() {
+  if (!eiSelectedCols.size) {
+    return toast('Pilih minimal 1 kolom checklist untuk diekspor!', true);
+  }
+  if (!eiExportData.length) {
+    return toast('Tidak ada data warga yang cocok dengan filter untuk diekspor.', true);
+  }
+  if (typeof XLSX === 'undefined') {
+    return toast('Pustaka Excel sedang dimuat, silakan coba sesaat lagi...', true);
+  }
+
+  const meta = getExportMeta();
+  const activeCols = EXPORT_COLUMNS.filter((c) => eiSelectedCols.has(c.key));
+  const headerRow = ['NO', ...activeCols.map((c) => c.label)];
+  const dataRows = eiExportData.map((r, i) => [
+    i + 1,
+    ...activeCols.map((c) => getExportVal(r, c.key)),
+  ]);
+
+  // Kop Resmi & Judul Dokumen di Baris 1 - 3 Excel
+  const kopPartsExcel = [
+    'STATUS: ' + meta.statusLabel.toUpperCase(),
+    'DESA: ' + (meta.desaName ? meta.desaName.toUpperCase() : 'SEMUA DESA'),
+  ];
+  if (meta.dusunName) kopPartsExcel.push('DUSUN: ' + meta.dusunName.toUpperCase());
+
+  const titleRows = [
+    ['PENGURUS ANAK CABANG PDI PERJUANGAN KECAMATAN BANTARSARI'],
+    ['LAPORAN DATA KADER & PENGURUS'],
+    [kopPartsExcel.join(' | ')],
+    [`WAKTU EKSPOR: ${meta.tglWaktu} WIB | TOTAL DATA: ${eiExportData.length} ORANG`],
+    [],
+  ];
+
+  const wsData = [...titleRows, headerRow, ...dataRows];
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+  // Set tipe string untuk NIK, HP, RT, RW agar format tidak berubah
+  activeCols.forEach((c, colIdx) => {
+    const tableColIdx = colIdx + 1; // offset kolom NO
+    if (['nik', 'hp', 'rt', 'rw', 'no_kta'].includes(c.key)) {
+      for (let r = 5; r <= wsData.length; r++) {
+        const cellRef = XLSX.utils.encode_cell({ r: r - 1, c: tableColIdx });
+        if (ws[cellRef]) ws[cellRef].t = 's';
+      }
+    }
+  });
+
+  // Hitung lebar kolom otomatis yang proporsional
+  ws['!cols'] = headerRow.map((h, i) => {
+    let maxLen = h.length;
+    for (let j = 0; j < Math.min(dataRows.length, 60); j++) {
+      const valStr = String(dataRows[j]?.[i] ?? '');
+      if (valStr.length > maxLen) maxLen = valStr.length;
+    }
+    return { wch: Math.min(Math.max(maxLen + 3, i === 0 ? 6 : 10), 45) };
+  });
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Data Kader');
+  const finalFileName = `${meta.fileNameBase}.xlsx`;
+  XLSX.writeFile(wb, finalFileName);
+  toast(`Berhasil mengunduh berkas Excel: ${finalFileName}`);
+}
+
+function handleExportCsv() {
+  if (!eiSelectedCols.size) {
+    return toast('Pilih minimal 1 kolom checklist untuk diekspor!', true);
+  }
+  if (!eiExportData.length) {
+    return toast('Tidak ada data warga yang cocok dengan filter untuk diekspor.', true);
+  }
+
+  const meta = getExportMeta();
+  const activeCols = EXPORT_COLUMNS.filter((c) => eiSelectedCols.has(c.key));
+  const headers = ['NO', ...activeCols.map((c) => c.label)].map(csvCell).join(',');
+  const lines = [headers];
+
+  eiExportData.forEach((r, i) => {
+    const rowCells = [
+      i + 1,
+      ...activeCols.map((c) => {
+        const v = getExportVal(r, c.key);
+        if (c.key === 'nik') return `="${r.nik || ''}"`;
+        return csvCell(v);
+      }),
+    ];
+    lines.push(rowCells.join(','));
+  });
+
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const finalFileName = `${meta.fileNameBase}.csv`;
+  a.download = finalFileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  toast(`Berhasil mengunduh berkas CSV: ${finalFileName}`);
+}
+
+function handleExportPdf() {
+  if (!eiSelectedCols.size) {
+    return toast('Pilih minimal 1 kolom checklist untuk diekspor!', true);
+  }
+  if (!eiExportData.length) {
+    return toast('Tidak ada data warga yang cocok dengan filter untuk diekspor.', true);
+  }
+  if (!window.jspdf?.jsPDF) {
+    return toast('Pustaka PDF sedang dimuat, silakan coba sesaat lagi...', true);
+  }
+
+  const { jsPDF } = window.jspdf;
+  const activeCols = EXPORT_COLUMNS.filter((c) => eiSelectedCols.has(c.key));
+  const paper = $('#pdf-paper')?.value || 'a4';
+  let orient = $('#pdf-orient')?.value || 'auto';
+  if (orient === 'auto') {
+    orient = activeCols.length > 5 ? 'landscape' : 'portrait';
+  }
+
+  const doc = new jsPDF({
+    orientation: orient,
+    unit: 'mm',
+    format: paper === 'folio' ? [215, 330] : 'a4',
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const meta = getExportMeta();
+
+  // --- KOP RESMI PDI PERJUANGAN BANTARSARI ---
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12.5);
+  doc.setTextColor(193, 18, 31); // Merah PDI Perjuangan
+  doc.text('PENGURUS ANAK CABANG PARTAI DEMOKRASI INDONESIA PERJUANGAN', pageWidth / 2, 12, { align: 'center' });
+
+  doc.setFontSize(10.5);
+  doc.text('(PAC PDI PERJUANGAN) KECAMATAN BANTARSARI', pageWidth / 2, 17.5, { align: 'center' });
+
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(30, 41, 59);
+  doc.text('KABUPATEN CILACAP — PROVINSI JAWA TENGAH', pageWidth / 2, 22.5, { align: 'center' });
+
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(100, 116, 139);
+  doc.text('Sekretariat: Kandang Banteng, Kec. Bantarsari, Kab. Cilacap, Jawa Tengah 53281', pageWidth / 2, 27, { align: 'center' });
+
+  // Garis kop ganda (merah tebal & aksen emas)
+  doc.setDrawColor(193, 18, 31);
+  doc.setLineWidth(0.8);
+  doc.line(10, 29.5, pageWidth - 10, 29.5);
+  doc.setDrawColor(217, 119, 6);
+  doc.setLineWidth(0.35);
+  doc.line(10, 30.7, pageWidth - 10, 30.7);
+
+  // --- KOTAK JUDUL LAPORAN (MEMUAT STATUS, DESA, DUSUN SECARA PRESISI) ---
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.3);
+  doc.roundedRect(10, 33, pageWidth - 20, 16.5, 2, 2, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.setTextColor(185, 28, 28);
+  doc.text('LAPORAN DATA KADER & PENGURUS', pageWidth / 2, 38, { align: 'center' });
+
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(30, 41, 59);
+  const kopPartsPdf = [
+    'STATUS: ' + meta.statusLabel.toUpperCase(),
+    'DESA: ' + (meta.desaName ? meta.desaName.toUpperCase() : 'SEMUA DESA'),
+  ];
+  if (meta.dusunName) kopPartsPdf.push('DUSUN: ' + meta.dusunName.toUpperCase());
+  doc.text(kopPartsPdf.join('   |   '), pageWidth / 2, 42.5, { align: 'center' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `Waktu Ekspor: ${meta.tglWaktu} WIB   |   Total Data: ${eiExportData.length} Orang   |   Operator: ${state.me?.nama || 'Administrator'}`,
+    pageWidth / 2,
+    46.8,
+    { align: 'center' }
+  );
+
+  // --- TABEL DATA ---
+  const head = [['NO', ...activeCols.map((c) => c.label)]];
+  const body = eiExportData.map((r, i) => [
+    i + 1,
+    ...activeCols.map((c) => String(getExportVal(r, c.key) ?? '-')),
+  ]);
+
+  // Dynamic Column Styles for optimal cell alignments
+  const colStyles = {
+    0: { halign: 'center', cellWidth: 9 }, // Kolom NO
+  };
+  activeCols.forEach((c, idx) => {
+    const tableColIdx = idx + 1;
+    if (c.key === 'nik') colStyles[tableColIdx] = { halign: 'center', cellWidth: activeCols.length > 8 ? 29 : 35 };
+    else if (c.key === 'jk') colStyles[tableColIdx] = { halign: 'center', cellWidth: 9 };
+    else if (c.key === 'tgl_lahir') colStyles[tableColIdx] = { halign: 'center', cellWidth: 20 };
+    else if (c.key === 'umur') colStyles[tableColIdx] = { halign: 'center', cellWidth: 12 };
+    else if (c.key === 'rt' || c.key === 'rw') colStyles[tableColIdx] = { halign: 'center', cellWidth: 10 };
+    else if (c.key === 'hp') colStyles[tableColIdx] = { halign: 'center', cellWidth: 26 };
+    else if (c.key === 'status') colStyles[tableColIdx] = { halign: 'center', cellWidth: 22 };
+    else if (c.key === 'nama') colStyles[tableColIdx] = { fontStyle: 'bold' };
+  });
+
+  const isFewCols = activeCols.length <= 6;
+  const isManyCols = activeCols.length > 9;
+  const isSuperManyCols = activeCols.length > 13;
+
+  doc.autoTable({
+    head,
+    body,
+    startY: 52,
+    margin: { left: 10, right: 10, bottom: 14 },
+    theme: 'grid',
+    styles: {
+      overflow: 'linebreak',
+      cellPadding: isSuperManyCols ? 1.4 : isManyCols ? 1.8 : 2.2,
+      fontSize: isSuperManyCols ? 6.2 : isManyCols ? 7 : isFewCols ? 8.2 : 7.6,
+      textColor: [15, 23, 42],
+      valign: 'middle',
+      lineColor: [203, 213, 225],
+      lineWidth: 0.15,
+    },
+    headStyles: {
+      fillColor: [185, 28, 28],
+      textColor: 255,
+      fontStyle: 'bold',
+      fontSize: isSuperManyCols ? 6.8 : isManyCols ? 7.4 : isFewCols ? 8.6 : 8.0,
+      halign: 'center',
+      valign: 'middle',
+    },
+    alternateRowStyles: {
+      fillColor: [248, 250, 252],
+    },
+    columnStyles: colStyles,
+  });
+
+  // Nomor halaman dan footer presisi di setiap halaman: "Halaman X dari Y"
+  const totalPages = doc.internal.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p++) {
+    doc.setPage(p);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(148, 163, 184);
+    doc.text(
+      'Sistem Informasi BANTAR RED · Dokumen resmi PAC PDI Perjuangan Kecamatan Bantarsari',
+      10,
+      pageHeight - 6
+    );
+    doc.text(`Halaman ${p} dari ${totalPages}`, pageWidth - 10, pageHeight - 6, { align: 'right' });
+  }
+
+  const finalFileName = `${meta.fileNameBase}.pdf`;
+  doc.save(finalFileName);
+  toast(`Berhasil mengunduh dokumen PDF: ${finalFileName}`);
+}
+
+/* ---------------- IMPORT TAB ---------------- */
+function renderImportTab() {
+  const tc = $('#ei-tab-content');
+  if (!tc) return;
+
+  tc.innerHTML = `
+    <!-- PANDUAN & UNDUH TEMPLATE -->
+    <section class="ei-card">
+      <div class="ei-card-head">
+        <div class="ei-card-title">
+          <span class="step-num">1</span>
+          <div>
+            <h3>Panduan &amp; Unduh Template Format Import</h3>
+            <p class="ei-card-subtitle">Unduh format template resmi agar data Anda langsung cocok dan diproses secara otomatis.</p>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button type="button" class="btn btn-sm" id="btn-tpl-excel">📥 Unduh Template Excel (.xlsx)</button>
+          <button type="button" class="btn btn-sm" id="btn-tpl-csv">📥 Unduh Template CSV (.csv)</button>
+        </div>
+      </div>
+      <div style="background:var(--panel-strong);border:1px solid var(--line);border-radius:12px;padding:14px 18px;font-size:13.5px;color:var(--muted);line-height:1.6">
+        <strong style="color:#fff;display:block;margin-bottom:4px">Ketentuan Import Data:</strong>
+        <ul style="margin:0;padding-left:18px">
+          <li><b>NIK:</b> Wajib 16 digit angka (tidak boleh ada spasi atau tanda baca).</li>
+          <li><b>Nama Lengkap:</b> Wajib diisi.</li>
+          <li><b>Desa &amp; Dusun:</b> Sesuaikan dengan daftar desa resmi Kecamatan Bantarsari (Bantarsari, Binangun, Bulaksari, Cikedondong, Citembong, Kamulyan, Kedungwadas, Rawajaya). Dusun baru akan otomatis ditambahkan ke desa bersangkutan jika belum ada.</li>
+          <li><b>Jenis Kelamin (JK):</b> Isi <code>L</code> untuk Laki-laki atau <code>P</code> untuk Perempuan.</li>
+          <li><b>Tanggal Lahir:</b> Format <code>YYYY-MM-DD</code> (contoh: <code>1990-05-20</code>) atau <code>DD/MM/YYYY</code>.</li>
+          <li><b>Status Kepartaian:</b> Pilihan: <code>NETRAL</code>, <code>STRUKTURAL</code>, <code>ADS</code>, <code>SOBAT_KAISAR</code>, atau <code>LAINNYA</code> (bisa koma jika lebih dari satu).</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- UPLOAD DROPZONE -->
+    <section class="ei-card">
+      <div class="ei-card-head">
+        <div class="ei-card-title">
+          <span class="step-num">2</span>
+          <div>
+            <h3>Pilih Berkas Excel / CSV yang Ingin Diimpor</h3>
+            <p class="ei-card-subtitle">Dukungan berkas: .xlsx, .xls, atau .csv.</p>
+          </div>
+        </div>
+      </div>
+
+      <input type="file" id="ei-file-input" accept=".xlsx,.xls,.csv" style="display:none" />
+      
+      <div class="ei-dropzone" id="ei-dropzone" role="button" tabindex="0" aria-label="Klik atau seret berkas ke sini">
+        <span class="drop-icon">📁</span>
+        <strong>Seret berkas Excel/CSV ke sini atau <span style="color:var(--gold);text-decoration:underline">klik untuk memilih</span></strong>
+        <p>Sistem akan memvalidasi data secara otomatis sebelum disimpan ke database.</p>
+      </div>
+
+      <div id="ei-file-info-container"></div>
+    </section>
+
+    <!-- PRATINJAU & EKSEKUSI (JIKA SUDAH PILIH FILE) -->
+    <div id="ei-import-preview-section"></div>`;
+
+  $('#btn-tpl-excel').onclick = downloadTemplateExcel;
+  $('#btn-tpl-csv').onclick = downloadTemplateCsv;
+
+  const dropzone = $('#ei-dropzone');
+  const fileInput = $('#ei-file-input');
+
+  dropzone.onclick = () => fileInput.click();
+  dropzone.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } };
+
+  ['dragenter', 'dragover'].forEach((eventName) => {
+    dropzone.addEventListener(eventName, (e) => {
+      e.preventDefault();
+      dropzone.classList.add('dragover');
+    });
+  });
+  ['dragleave', 'drop'].forEach((eventName) => {
+    dropzone.addEventListener(eventName, (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('dragover');
+    });
+  });
+  dropzone.addEventListener('drop', (e) => {
+    const files = e.dataTransfer.files;
+    if (files.length) handleSelectedImportFile(files[0]);
+  });
+
+  fileInput.onchange = () => {
+    if (fileInput.files.length) handleSelectedImportFile(fileInput.files[0]);
+  };
+
+  if (eiImportFileRows.length) {
+    showImportFilePreview();
+  }
+}
+
+function downloadTemplateExcel() {
+  if (typeof XLSX === 'undefined') return toast('Pustaka Excel sedang dimuat...', true);
+  const head = [
+    'NIK (16 Digit)', 'Nama Lengkap', 'Jenis Kelamin (L/P)', 'Tempat Lahir',
+    'Tanggal Lahir (YYYY-MM-DD)', 'Status Perkawinan', 'Pekerjaan', 'Desa', 'Dusun',
+    'RT', 'RW', 'Alamat Lengkap', 'No HP / WhatsApp', 'Status Kepartaian',
+    'Jabatan', 'Tingkat', 'No KTA', 'Catatan'
+  ];
+  const sample = [
+    [
+      '3301010101900001', 'Ahmad Subagyo', 'L', 'Cilacap', '1990-05-12', 'Kawin', 'Petani',
+      'Bantarsari', 'Cikerang', '01', '02', 'Jl. Merdeka No. 12', '081234567890', 'STRUKTURAL',
+      'Ketua Ranting', 'Ranting', 'KTA-3301-001', 'Kader aktif'
+    ],
+    [
+      '3301010202950002', 'Siti Rahmawati', 'P', 'Bantarsari', '1995-08-20', 'Belum Kawin', 'Wiraswasta',
+      'Kamulyan', 'Mulyadadi', '03', '01', 'Dusun Mulyadadi RT 03', '085712345678', 'ADS',
+      '', '', '', 'Simpatisan'
+    ],
+    [
+      '3301010303880003', 'Budi Santoso', 'L', 'Cilacap', '1988-12-05', 'Kawin', 'Buruh',
+      'Rawajaya', 'Rawasari', '02', '04', 'Rawajaya RT 02 RW 04', '089612345678', 'NETRAL',
+      '', '', '', ''
+    ],
+  ];
+
+  const ws = XLSX.utils.aoa_to_sheet([head, ...sample]);
+  head.forEach((h, colIdx) => {
+    for (let r = 1; r <= sample.length; r++) {
+      const cellRef = XLSX.utils.encode_cell({ r, c: colIdx });
+      if (ws[cellRef]) ws[cellRef].t = 's';
+    }
+  });
+
+  ws['!cols'] = head.map((h, i) => {
+    let max = h.length;
+    for (let r = 0; r < sample.length; r++) {
+      const s = String(sample[r][i] || '');
+      if (s.length > max) max = s.length;
+    }
+    return { wch: max + 4 };
+  });
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Template Import');
+  XLSX.writeFile(wb, 'Template-Import-Data-Kader-Bantarsari.xlsx');
+  toast('Template Excel berhasil diunduh');
+}
+
+function downloadTemplateCsv() {
+  const head = [
+    'NIK (16 Digit)', 'Nama Lengkap', 'Jenis Kelamin (L/P)', 'Tempat Lahir',
+    'Tanggal Lahir (YYYY-MM-DD)', 'Status Perkawinan', 'Pekerjaan', 'Desa', 'Dusun',
+    'RT', 'RW', 'Alamat Lengkap', 'No HP / WhatsApp', 'Status Kepartaian',
+    'Jabatan', 'Tingkat', 'No KTA', 'Catatan'
+  ];
+  const sample = [
+    [
+      '="3301010101900001"', 'Ahmad Subagyo', 'L', 'Cilacap', '1990-05-12', 'Kawin', 'Petani',
+      'Bantarsari', 'Cikerang', '01', '02', 'Jl. Merdeka No. 12', '081234567890', 'STRUKTURAL',
+      'Ketua Ranting', 'Ranting', 'KTA-3301-001', 'Kader aktif'
+    ],
+    [
+      '="3301010202950002"', 'Siti Rahmawati', 'P', 'Bantarsari', '1995-08-20', 'Belum Kawin', 'Wiraswasta',
+      'Kamulyan', 'Mulyadadi', '03', '01', 'Dusun Mulyadadi RT 03', '085712345678', 'ADS',
+      '', '', '', 'Simpatisan'
+    ],
+  ];
+
+  const lines = [head.map(csvCell).join(',')];
+  sample.forEach((row) => {
+    lines.push(row.map((v, i) => (i === 0 ? v : csvCell(v))).join(','));
+  });
+
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'Template-Import-Data-Kader-Bantarsari.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  toast('Template CSV berhasil diunduh');
+}
+
+function handleSelectedImportFile(file) {
+  if (!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (!['xlsx', 'xls', 'csv'].includes(ext)) {
+    return toast('Format berkas harus .xlsx, .xls, atau .csv', true);
+  }
+
+  eiImportFileName = file.name;
+  eiImportFileSize = file.size;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const wb = XLSX.read(data, { type: 'array' });
+      const firstSheet = wb.Sheets[wb.SheetNames[0]];
+      const rawRows = XLSX.utils.sheet_to_json(firstSheet, { defval: '', raw: false });
+
+      if (!rawRows.length) {
+        return toast('Berkas tidak memiliki baris data untuk diimpor!', true);
+      }
+
+      eiImportFileRows = normalizeImportRows(rawRows);
+      showImportFilePreview();
+      toast(`Berhasil membaca ${eiImportFileRows.length} baris dari berkas ${file.name}`);
+    } catch (err) {
+      console.error('Error membaca file import:', err);
+      toast('Gagal membaca berkas: ' + err.message, true);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function normalizeImportRows(rawRows) {
+  return rawRows.map((raw) => {
+    const item = {};
+    Object.entries(raw).forEach(([k, v]) => {
+      const cleanKey = String(k).toLowerCase().replace(/[^a-z0-9]/g, '');
+      const strVal = String(v ?? '').trim();
+
+      if (cleanKey.includes('nik') || cleanKey.includes('ktp')) item.nik = strVal.replace(/\D/g, '');
+      else if (cleanKey.includes('nama') || cleanKey === 'namaanggota' || cleanKey === 'namawarga') item.nama = strVal;
+      else if (cleanKey === 'jk' || cleanKey.includes('jeniskelamin') || cleanKey === 'gender' || cleanKey === 'lp') item.jk = strVal;
+      else if (cleanKey.includes('tempatlahir')) item.tempat_lahir = strVal;
+      else if (cleanKey.includes('tgllahir') || cleanKey.includes('tanggallahir')) item.tgl_lahir = strVal;
+      else if (cleanKey.includes('kawin') || cleanKey.includes('perkawinan')) item.status_kawin = strVal;
+      else if (cleanKey.includes('kerja') || cleanKey.includes('pekerjaan') || cleanKey.includes('profesi')) item.pekerjaan = strVal;
+      else if (cleanKey === 'desa' || cleanKey.includes('kelurahan')) item.desa = strVal;
+      else if (cleanKey === 'dusun' || cleanKey.includes('dukuh') || cleanKey.includes('kampung')) item.dusun = strVal;
+      else if (cleanKey === 'rt') item.rt = strVal;
+      else if (cleanKey === 'rw') item.rw = strVal;
+      else if (cleanKey === 'alamat' || cleanKey.includes('alamatlengkap')) item.alamat = strVal;
+      else if (cleanKey.includes('hp') || cleanKey.includes('telepon') || cleanKey.includes('wa') || cleanKey.includes('whatsapp') || cleanKey === 'kontak') item.hp = strVal;
+      else if (cleanKey === 'status' || cleanKey.includes('statuskader') || cleanKey.includes('statuspartai') || cleanKey.includes('statuskepartaian')) item.status = strVal;
+      else if (cleanKey.includes('jabatan')) item.jabatan = strVal;
+      else if (cleanKey.includes('tingkat')) item.tingkat = strVal;
+      else if (cleanKey.includes('kta') || cleanKey.includes('nokta')) item.no_kta = strVal;
+      else if (cleanKey.includes('catatan') || cleanKey.includes('keterangan')) item.catatan = strVal;
+    });
+    return item;
+  });
+}
+
+function showImportFilePreview() {
+  const infoCont = $('#ei-file-info-container');
+  if (infoCont) {
+    const sizeKb = (eiImportFileSize / 1024).toFixed(1);
+    infoCont.innerHTML = `
+      <div class="ei-file-picked">
+        <div class="ei-file-info">
+          <span class="f-icon">📄</span>
+          <div>
+            <strong>${esc(eiImportFileName)}</strong>
+            <small>${sizeKb} KB · ${eiImportFileRows.length} baris data terbaca</small>
+          </div>
+        </div>
+        <button type="button" class="btn btn-sm" id="btn-reselect-file">Ganti Berkas</button>
+      </div>`;
+    $('#btn-reselect-file').onclick = () => $('#ei-file-input').click();
+  }
+
+  // Row validation summary
+  const seenNiks = new Set();
+  let validCount = 0;
+  let warnCount = 0;
+
+  const evaluatedRows = eiImportFileRows.map((r, i) => {
+    const errors = [];
+    const warnings = [];
+
+    if (!r.nik || r.nik.length !== 16) {
+      errors.push('NIK bukan 16 digit');
+    } else if (seenNiks.has(r.nik)) {
+      warnings.push('Duplikat di berkas ini');
+    } else {
+      seenNiks.add(r.nik);
+    }
+
+    if (!r.nama) errors.push('Nama kosong');
+    if (!r.desa && state.me?.role === 'admin') warnings.push('Desa kosong');
+
+    if (errors.length) {
+      warnCount++;
+      return { ...r, _status: 'err', _msg: errors.join(', ') };
+    } else if (warnings.length) {
+      validCount++;
+      return { ...r, _status: 'warn', _msg: warnings.join(', ') };
+    } else {
+      validCount++;
+      return { ...r, _status: 'ok', _msg: 'Siap Diimpor' };
+    }
+  });
+
+  const previewSec = $('#ei-import-preview-section');
+  if (!previewSec) return;
+
+  previewSec.innerHTML = `
+    <section class="ei-card">
+      <div class="ei-card-head">
+        <div class="ei-card-title">
+          <span class="step-num">3</span>
+          <div>
+            <h3>Opsi Penanganan &amp; Pratinjau Data</h3>
+            <p class="ei-card-subtitle">Periksa pratinjau data di bawah sebelum memproses penyimpanan.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Duplicate Handling Radio -->
+      <div class="ei-options-box">
+        <label class="ei-radio-option ${!eiUpdateExisting ? 'selected' : ''}">
+          <input type="radio" name="ei-dup-mode" value="skip" ${!eiUpdateExisting ? 'checked' : ''} />
+          <div>
+            <strong>Lewati jika NIK sudah ada di database (Direkomendasikan)</strong>
+            <small>Data warga yang NIK-nya sudah terdaftar tidak akan diubah atau ditimpa.</small>
+          </div>
+        </label>
+        <label class="ei-radio-option ${eiUpdateExisting ? 'selected' : ''}">
+          <input type="radio" name="ei-dup-mode" value="update" ${eiUpdateExisting ? 'checked' : ''} />
+          <div>
+            <strong>Perbarui data warga jika NIK sudah ada</strong>
+            <small>Data lama akan diperbarui sesuai informasi terbaru dari berkas ini.</small>
+          </div>
+        </label>
+      </div>
+
+      <!-- Stats Bar -->
+      <div class="ei-stats-row">
+        <div class="ei-mini-stat">
+          <small>Total Terdeteksi</small>
+          <b>${eiImportFileRows.length}</b>
+        </div>
+        <div class="ei-mini-stat ok">
+          <small>Siap Diimpor</small>
+          <b>${validCount}</b>
+        </div>
+        <div class="ei-mini-stat ${warnCount > 0 ? 'err' : 'ok'}">
+          <small>Perlu Perhatian</small>
+          <b>${warnCount}</b>
+        </div>
+      </div>
+
+      <!-- Table Preview (first 10 rows) -->
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <span style="font-size:13px;font-weight:600;color:var(--muted)">Pratinjau 10 Baris Pertama:</span>
+          <small style="color:var(--muted)">Menampilkan max 10 baris</small>
+        </div>
+        <div class="ei-preview-box">
+          <table class="ei-preview-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Status Validasi</th>
+                <th>NIK</th>
+                <th>Nama Lengkap</th>
+                <th>JK</th>
+                <th>Desa</th>
+                <th>Dusun</th>
+                <th>RT / RW</th>
+                <th>No. HP</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${evaluatedRows.slice(0, 10).map((r, i) => `
+                <tr>
+                  <td>${i + 1}</td>
+                  <td>
+                    <span class="ei-status-badge ${r._status}">
+                      ${r._status === 'ok' ? '✓ ' : r._status === 'warn' ? '⚠ ' : '✕ '}
+                      ${esc(r._msg)}
+                    </span>
+                  </td>
+                  <td class="mono">${esc(r.nik || '-')}</td>
+                  <td><b>${esc(r.nama || '-')}</b></td>
+                  <td>${esc(r.jk || '-')}</td>
+                  <td>${esc(r.desa || '-')}</td>
+                  <td>${esc(r.dusun || '-')}</td>
+                  <td>${esc([r.rt ? 'RT ' + r.rt : '', r.rw ? 'RW ' + r.rw : ''].filter(Boolean).join(' ') || '-')}</td>
+                  <td>${esc(r.hp || '-')}</td>
+                  <td>${badge(r.status || 'NETRAL')}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Action Button -->
+      <div style="display:flex;gap:12px;align-items:center;justify-content:flex-end;margin-top:8px">
+        <button type="button" class="btn btn-primary" id="btn-start-import" style="padding:12px 28px;font-size:15px">
+          🚀 Mulai Import ${validCount} Data Warga
+        </button>
+      </div>
+    </section>`;
+
+  $$('input[name="ei-dup-mode"]').forEach((r) => {
+    r.onchange = () => {
+      eiUpdateExisting = r.value === 'update';
+      $$('.ei-radio-option').forEach((opt) => {
+        opt.classList.toggle('selected', opt.querySelector('input').checked);
+      });
+    };
+  });
+
+  $('#btn-start-import').onclick = () => executeImportProcess(validCount);
+}
+
+async function executeImportProcess(validCount) {
+  if (!eiImportFileRows.length || validCount === 0) {
+    return toast('Tidak ada data valid yang bisa diimpor!', true);
+  }
+
+  const ok = await confirmBox(
+    'Konfirmasi Import Data',
+    `Yakin ingin mengimpor <b>${eiImportFileRows.length} data warga</b> ke database?<br><br>` +
+    `Mode Duplikat: <b>${eiUpdateExisting ? 'Perbarui data yang sudah ada' : 'Lewati NIK yang sudah ada'}</b>.`,
+    'Ya, Mulai Import'
+  );
+  if (!ok) return;
+
+  const btn = $('#btn-start-import');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Sedang Memproses Import...';
+  }
+
+  try {
+    const res = await api('/import', {
+      method: 'POST',
+      body: {
+        rows: eiImportFileRows,
+        updateExisting: eiUpdateExisting,
+      },
+    });
+
+    // Reset imported file state
+    eiImportFileRows = [];
+    eiImportFileName = '';
+    eiImportFileSize = 0;
+
+    let errorListHtml = '';
+    if (res.errors && res.errors.length) {
+      errorListHtml = `
+        <div style="margin-top:14px;text-align:left">
+          <small style="font-weight:600;color:#f87171;display:block;margin-bottom:6px">Catatan / Peringatan Baris (${res.errors.length}):</small>
+          <div style="max-height:160px;overflow:auto;background:var(--field);border:1px solid var(--line);border-radius:9px;padding:8px 12px;font-size:12px;color:var(--muted)">
+            ${res.errors.map((e) => `<div>• ${esc(e)}</div>`).join('')}
+          </div>
+        </div>`;
+    }
+
+    openModal(
+      'Hasil Import Data Selesai',
+      `<div style="text-align:center;padding:10px 4px">
+        <div style="font-size:42px;margin-bottom:10px">🎉</div>
+        <h3 style="margin-bottom:6px">Proses Import Selesai!</h3>
+        <p class="muted" style="font-size:14px;margin-bottom:18px">Berikut adalah rangkuman hasil import data ke database:</p>
+        
+        <div class="ei-stats-row" style="margin-bottom:14px">
+          <div class="ei-mini-stat">
+            <small>Total Diproses</small>
+            <b>${res.total}</b>
+          </div>
+          <div class="ei-mini-stat ok">
+            <small>Data Baru</small>
+            <b>${res.inserted}</b>
+          </div>
+          <div class="ei-mini-stat warn">
+            <small>Diperbarui</small>
+            <b>${res.updated}</b>
+          </div>
+          <div class="ei-mini-stat ${res.skipped > 0 ? 'err' : ''}">
+            <small>Dilewati</small>
+            <b>${res.skipped}</b>
+          </div>
+        </div>
+
+        ${errorListHtml}
+
+        <div style="display:flex;gap:10px;justify-content:center;margin-top:20px">
+          <button type="button" class="btn" id="modal-btn-close">Tutup</button>
+          <button type="button" class="btn btn-primary" id="modal-btn-warga">Lihat di Menu Database</button>
+        </div>
+      </div>`
+    );
+
+    $('#modal-btn-close').onclick = () => {
+      closeModal();
+      renderImportTab();
+    };
+    $('#modal-btn-warga').onclick = () => {
+      closeModal();
+      go('warga');
+    };
+  } catch (err) {
+    console.error('Import API error:', err);
+    toast('Gagal melakukan import: ' + err.message, true);
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = `🚀 Mulai Import ${validCount} Data Warga`;
+    }
+  }
 }
 
 boot();

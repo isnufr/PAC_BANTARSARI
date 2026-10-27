@@ -635,7 +635,16 @@ const csvCell = (v) => {
 const EXPORT_COL_DEFS = {
   nik: { label: 'NIK', fn: (r) => r.nik || '' },
   nama: { label: 'Nama Lengkap', fn: (r) => r.nama || '' },
-  jk: { label: 'JK', fn: (r) => r.jk || '-' },
+  jk: {
+    label: 'JK',
+    fn: (r) => {
+      if (!r.jk) return '-';
+      const val = String(r.jk).trim().toUpperCase();
+      if (val === 'L' || val.startsWith('LAKI')) return 'L';
+      if (val === 'P' || val.startsWith('PEREMPUAN') || val.startsWith('WANITA')) return 'P';
+      return val;
+    },
+  },
   tempat_lahir: { label: 'Tempat Lahir', fn: (r) => r.tempat_lahir || '-' },
   tgl_lahir: { label: 'Tgl Lahir', fn: (r) => r.tgl_lahir || '-' },
   umur: { label: 'Umur', fn: (r) => (r.umur != null ? r.umur : '-') },

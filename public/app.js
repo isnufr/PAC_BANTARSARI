@@ -444,7 +444,7 @@ function wargaDetail(r, isTrash = false) {
     <div style="display:flex;gap:12px;align-items:center;margin-bottom:16px"><div class="avatar" style="width:52px;height:52px;font-size:22px">${esc(r.nama[0])}</div>
       <div><h3 style="font-size:20px">${esc(r.nama)}</h3>${badge(r.status)}</div></div>
     <dl class="kv">
-      ${row('NIK', r.nik)}${row('Jenis kelamin', r.jk === 'L' ? 'Laki-laki' : r.jk === 'P' ? 'Perempuan' : '')}
+      ${row('NIK', r.nik)}${row('Jenis kelamin', r.jk === 'L' ? 'L (Laki-laki)' : r.jk === 'P' ? 'P (Perempuan)' : '')}
       ${row('Tempat, tgl lahir', [r.tempat_lahir, r.tgl_lahir && fmtDate(r.tgl_lahir)].filter(Boolean).join(', '))}
       ${row('Umur', r.umur != null ? r.umur + ' tahun' : '')}${row('Status kawin', r.status_kawin)}${row('Pekerjaan', r.pekerjaan)}
       ${row('Desa', r.desa)}${row('Dusun', r.dusun_nama)}${row('RT / RW', `${r.rt || '-'} / ${r.rw || '-'}`)}${r.alamat ? row('Alamat', r.alamat) : ''}${row('No. HP', hpDisplay)}
@@ -892,7 +892,13 @@ function getExportVal(r, key) {
   switch (key) {
     case 'nik': return r.nik ? String(r.nik) : '';
     case 'nama': return r.nama || '';
-    case 'jk': return r.jk === 'L' ? 'Laki-laki (L)' : r.jk === 'P' ? 'Perempuan (P)' : (r.jk || '-');
+    case 'jk': {
+      if (!r.jk) return '-';
+      const val = String(r.jk).trim().toUpperCase();
+      if (val === 'L' || val.startsWith('LAKI')) return 'L';
+      if (val === 'P' || val.startsWith('PEREMPUAN') || val.startsWith('WANITA')) return 'P';
+      return val;
+    }
     case 'tempat_lahir': return r.tempat_lahir || '-';
     case 'tgl_lahir': return r.tgl_lahir || '-';
     case 'umur': return r.umur != null ? String(r.umur) : '-';
@@ -1508,32 +1514,71 @@ function handleExportPdf() {
     { align: 'center' }
   );
 
+  // Label ringkas khusus PDF agar header tidak memanjang dan melipat ke bawah (menghemat tinggi sel)
+  const PDF_HEADER_LABELS = {
+    nik: 'NIK',
+    nama: 'Nama Lengkap',
+    jk: 'L/P',
+    tempat_lahir: 'Tempat Lahir',
+    tgl_lahir: 'Tgl Lahir',
+    umur: 'Umur',
+    status_kawin: 'Status Kawin',
+    pekerjaan: 'Pekerjaan',
+    desa: 'Desa',
+    dusun_nama: 'Dusun',
+    rt: 'RT',
+    rw: 'RW',
+    alamat: 'Alamat',
+    hp: 'No. HP / WA',
+    status: 'Status',
+    jabatan: 'Jabatan',
+    tingkat: 'Tingkat',
+    no_kta: 'No. KTA',
+    catatan: 'Catatan',
+    created_at: 'Tgl Terdaftar',
+  };
+
   // --- TABEL DATA ---
-  const head = [['NO', ...activeCols.map((c) => c.label)]];
+  const head = [['NO', ...activeCols.map((c) => PDF_HEADER_LABELS[c.key] || c.label)]];
   const body = eiExportData.map((r, i) => [
     i + 1,
     ...activeCols.map((c) => String(getExportVal(r, c.key) ?? '-')),
   ]);
 
-  // Dynamic Column Styles for optimal cell alignments
-  const colStyles = {
-    0: { halign: 'center', cellWidth: 9 }, // Kolom NO
-  };
-  activeCols.forEach((c, idx) => {
-    const tableColIdx = idx + 1;
-    if (c.key === 'nik') colStyles[tableColIdx] = { halign: 'center', cellWidth: activeCols.length > 8 ? 29 : 35 };
-    else if (c.key === 'jk') colStyles[tableColIdx] = { halign: 'center', cellWidth: 9 };
-    else if (c.key === 'tgl_lahir') colStyles[tableColIdx] = { halign: 'center', cellWidth: 20 };
-    else if (c.key === 'umur') colStyles[tableColIdx] = { halign: 'center', cellWidth: 12 };
-    else if (c.key === 'rt' || c.key === 'rw') colStyles[tableColIdx] = { halign: 'center', cellWidth: 10 };
-    else if (c.key === 'hp') colStyles[tableColIdx] = { halign: 'center', cellWidth: 26 };
-    else if (c.key === 'status') colStyles[tableColIdx] = { halign: 'center', cellWidth: 22 };
-    else if (c.key === 'nama') colStyles[tableColIdx] = { fontStyle: 'bold' };
-  });
-
   const isFewCols = activeCols.length <= 6;
   const isManyCols = activeCols.length > 9;
   const isSuperManyCols = activeCols.length > 13;
+
+  // Dynamic Column Styles for optimal cell alignments
+  const colStyles = {
+    0: { halign: 'center', cellWidth: 8 }, // Kolom NO
+  };
+  activeCols.forEach((c, idx) => {
+    const tableColIdx = idx + 1;
+    if (c.key === 'nik') colStyles[tableColIdx] = { halign: 'center', cellWidth: isManyCols ? 28 : 34 };
+    else if (c.key === 'jk') colStyles[tableColIdx] = { halign: 'center', cellWidth: 9 };
+    else if (c.key === 'tgl_lahir') colStyles[tableColIdx] = { halign: 'center', cellWidth: 19 };
+    else if (c.key === 'umur') colStyles[tableColIdx] = { halign: 'center', cellWidth: 11 };
+    else if (c.key === 'rt' || c.key === 'rw') colStyles[tableColIdx] = { halign: 'center', cellWidth: 9 };
+    else if (c.key === 'hp') colStyles[tableColIdx] = { halign: 'center', cellWidth: 25 };
+    else if (c.key === 'status') colStyles[tableColIdx] = { halign: 'center', cellWidth: 21 };
+    else if (c.key === 'status_kawin') colStyles[tableColIdx] = { halign: 'center', cellWidth: 22 };
+    else if (c.key === 'no_kta') colStyles[tableColIdx] = { halign: 'center', cellWidth: 22 };
+    else if (c.key === 'nama') colStyles[tableColIdx] = { fontStyle: 'bold' };
+  });
+
+  // Ukuran padding rapat & presisi agar tinggi cell tidak terlalu tinggi/renggang
+  const bodyPadding = isSuperManyCols
+    ? { top: 0.7, bottom: 0.7, left: 1.0, right: 1.0 }
+    : isManyCols
+    ? { top: 0.9, bottom: 0.9, left: 1.2, right: 1.2 }
+    : { top: 1.1, bottom: 1.1, left: 1.5, right: 1.5 };
+
+  const headPadding = isSuperManyCols
+    ? { top: 1.0, bottom: 1.0, left: 1.0, right: 1.0 }
+    : isManyCols
+    ? { top: 1.2, bottom: 1.2, left: 1.2, right: 1.2 }
+    : { top: 1.4, bottom: 1.4, left: 1.5, right: 1.5 };
 
   doc.autoTable({
     head,
@@ -1543,20 +1588,25 @@ function handleExportPdf() {
     theme: 'grid',
     styles: {
       overflow: 'linebreak',
-      cellPadding: isSuperManyCols ? 1.4 : isManyCols ? 1.8 : 2.2,
-      fontSize: isSuperManyCols ? 6.2 : isManyCols ? 7 : isFewCols ? 8.2 : 7.6,
+      cellPadding: bodyPadding,
+      minCellHeight: isSuperManyCols ? 4.0 : isManyCols ? 4.5 : 5.0,
+      fontSize: isSuperManyCols ? 6.2 : isManyCols ? 6.8 : isFewCols ? 7.6 : 7.2,
       textColor: [15, 23, 42],
       valign: 'middle',
       lineColor: [203, 213, 225],
       lineWidth: 0.15,
+      lineHeightFactor: 1.1,
     },
     headStyles: {
       fillColor: [185, 28, 28],
       textColor: 255,
       fontStyle: 'bold',
-      fontSize: isSuperManyCols ? 6.8 : isManyCols ? 7.4 : isFewCols ? 8.6 : 8.0,
+      fontSize: isSuperManyCols ? 6.5 : isManyCols ? 7.0 : isFewCols ? 8.0 : 7.5,
       halign: 'center',
       valign: 'middle',
+      cellPadding: headPadding,
+      minCellHeight: isSuperManyCols ? 4.8 : 5.6,
+      lineHeightFactor: 1.1,
     },
     alternateRowStyles: {
       fillColor: [248, 250, 252],
